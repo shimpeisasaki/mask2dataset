@@ -81,7 +81,15 @@ class FastSAMPromptEngine:
             self._torch = torch
 
             # FastSAM
-            self._sam = FastSAM(self.fastsam_weights)
+            try:
+                self._sam = FastSAM(self.fastsam_weights)
+            except Exception as e:
+                raise RuntimeError(
+                    "Failed to load FastSAM weights. "
+                    f"weights='{self.fastsam_weights}'. "
+                    "If you don't have the weights file yet, download it (e.g. FastSAM-s.pt) "
+                    "and place it where this path points, or change FastSAMPromptEngine.fastsam_weights."
+                ) from e
 
             # CLIP
             self._clip_processor = CLIPProcessor.from_pretrained(self.clip_model_name_or_path)
