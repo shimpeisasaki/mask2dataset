@@ -11,6 +11,22 @@ GUIは1ウィンドウで、
 - `ffmpeg` (v360フィルタが有効なもの)
 - Pythonパッケージ: `pip install -r requirements.txt`
 
+## Quick Setup (venv)
+
+```bash
+cd /home/uedalab/wander2locate_ws/sam-dataset-generator
+bash scripts/setup_venv.sh .venv
+source .venv/bin/activate
+```
+
+補足:
+
+- `TORCH_CHANNEL` で torch 取得先を変更可能です（例: `cu128`, `cu126`, `cu124`, `cpu`）
+
+```bash
+TORCH_CHANNEL=cu128 bash scripts/setup_venv.sh .venv
+```
+
 ## Run
 
 ```bash
