@@ -23,7 +23,6 @@ classes:
   2:
     name: facade
     ade20k:
-      - wall
       - building
       - house
       - skyscraper
@@ -55,6 +54,7 @@ classes:
       - plant
 
       # level changes / structures
+      - wall
       - stairs
       - stairway
       - step

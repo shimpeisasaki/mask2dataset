@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import threading
 import tempfile
@@ -103,6 +104,10 @@ class AppGUI:
 
         self.var_show_seg = tk.BooleanVar(value=False)
 
+        # Image-folder preview navigation
+        self._image_files: List[Path] = []
+        self._image_index: int = 0
+
         self.preview1_photo: Optional[ImageTk.PhotoImage] = None
         self.preview1_rgb: Optional[np.ndarray] = None
         self.preview1_seg_rgb: Optional[np.ndarray] = None
@@ -113,6 +118,8 @@ class AppGUI:
         self.tiles_up: List[Tile] = []
         self.tiles_mid: List[Tile] = []
         self.tiles_down: List[Tile] = []
+
+        self._load_persisted_paths()
 
         self._build_layout()
 
@@ -193,6 +200,7 @@ class AppGUI:
         ttk.Label(row1, text="動画パス").pack(side="left")
         self.ent_video = ttk.Entry(row1, textvariable=self.var_video_path)
         self.ent_video.pack(side="left", fill="x", expand=True, padx=6)
+        self.ent_video.bind("<FocusOut>", lambda _e: self._on_video_path_edited())
         self.btn_video = ttk.Button(row1, text="参照", command=self._browse_video)
         self.btn_video.pack(side="left")
 
@@ -202,6 +210,7 @@ class AppGUI:
         ttk.Label(row2, text="画像フォルダ").pack(side="left")
         self.ent_images = ttk.Entry(row2, textvariable=self.var_images_dir)
         self.ent_images.pack(side="left", fill="x", expand=True, padx=6)
+        self.ent_images.bind("<FocusOut>", lambda _e: self._on_images_dir_edited())
         self.btn_images = ttk.Button(row2, text="参照", command=self._browse_images_dir)
         self.btn_images.pack(side="left")
 
@@ -211,17 +220,8 @@ class AppGUI:
         ttk.Label(row3, text="出力フォルダ").pack(side="left")
         self.ent_output = ttk.Entry(row3, textvariable=self.var_output_dir)
         self.ent_output.pack(side="left", fill="x", expand=True, padx=6)
+        self.ent_output.bind("<FocusOut>", lambda _e: self._persist_paths())
         ttk.Button(row3, text="参照", command=self._browse_output_dir).pack(side="left")
-
-        # Video FPS
-        row4 = ttk.Frame(frm_in)
-        row4.pack(fill="x", padx=8, pady=(2, 6))
-        ttk.Label(row4, text="FPS(動画) ").pack(side="left")
-        self.ent_fps = ttk.Entry(row4, textvariable=self.var_fps, width=10)
-        self.ent_fps.pack(side="left", padx=(0, 10))
-        ttk.Label(row4, text="プレビュー時刻[秒] ").pack(side="left")
-        self.ent_preview_time = ttk.Entry(row4, textvariable=self.var_preview_time, width=10)
-        self.ent_preview_time.pack(side="left")
 
         # Preview1 + (settings + legend) + preview2
         body = ttk.Frame(main)
@@ -236,9 +236,22 @@ class AppGUI:
 
         rowp = ttk.Frame(frm_p1)
         rowp.pack(fill="x", padx=8, pady=4)
-        ttk.Button(rowp, text="プレビュー1更新", command=self._on_preview1).pack(side="left")
+        self.btn_prev_image = ttk.Button(rowp, text="←", command=self._on_prev_image, width=3)
+        self.btn_prev_image.pack(side="left")
+        self.btn_next_image = ttk.Button(rowp, text="→", command=self._on_next_image, width=3)
+        self.btn_next_image.pack(side="left", padx=(4, 12))
+
+        ttk.Label(rowp, text="プレビュー時刻[秒]").pack(side="left")
+        self.ent_preview_time = ttk.Entry(rowp, textvariable=self.var_preview_time, width=10)
+        self.ent_preview_time.pack(side="left", padx=(6, 0))
+        self.ent_preview_time.bind("<Return>", lambda _e: self._on_preview1())
+        self.ent_preview_time.bind("<FocusOut>", lambda _e: self._on_preview1())
+
         self.lbl_time = ttk.Label(rowp, text="")
-        self.lbl_time.pack(side="left", padx=(12, 0))
+        self.lbl_time.pack(side="left", padx=(10, 0))
+
+        self.lbl_image_idx = ttk.Label(rowp, text="")
+        self.lbl_image_idx.pack(side="right")
 
         self.yaw_slider = tk.Scale(
             frm_p1,
@@ -277,6 +290,12 @@ class AppGUI:
         r1.pack(fill="x", padx=8, pady=4)
         ttk.Label(r1, text="1辺 解像度(px)").pack(side="left")
         ttk.Entry(r1, textvariable=self.var_out_size, width=10).pack(side="left", padx=6)
+
+        r_fps = ttk.Frame(frm_set)
+        r_fps.pack(fill="x", padx=8, pady=4)
+        ttk.Label(r_fps, text="FPS(動画)").pack(side="left")
+        self.ent_fps = ttk.Entry(r_fps, textvariable=self.var_fps, width=10)
+        self.ent_fps.pack(side="left", padx=(6, 0))
 
         grid = ttk.Frame(frm_set)
         grid.pack(fill="x", padx=8, pady=6)
@@ -377,8 +396,45 @@ class AppGUI:
             ttk.Label(item, text=f"{cls_id}: {names[cls_id]}").pack(side="left", padx=(6, 0))
 
     def _on_toggle_show_seg(self) -> None:
+        if self.var_show_seg.get() and self.preview1_rgb is not None and self.preview1_seg_rgb is None:
+            self._start_preview1_segmentation(self.preview1_rgb)
         self._refresh_preview1_overlay()
         self._refresh_preview2_images()
+
+    def _start_preview1_segmentation(self, pano_rgb: np.ndarray, *, req_id: Optional[int] = None) -> None:
+        if req_id is None:
+            self._preview1_req_id += 1
+            req_id = self._preview1_req_id
+
+        self._append_log("[info] preview1: segmenting...")
+
+        def worker() -> None:
+            try:
+                self.pipeline.engine.ensure_loaded()
+                cm = self.pipeline._ensure_class_map()  # cache if already loaded
+
+                ade = self.pipeline.engine.predict_ade_ids(pano_rgb)
+                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
+                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                    if ade_id < 0:
+                        continue
+                    lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
+
+                seg_rgb = overlay_segmentation(pano_rgb, lbl)
+            except Exception as e:
+                self.logger.log(f"preview1 segmentation failed: {e}")
+                return
+
+            def apply() -> None:
+                if req_id != self._preview1_req_id:
+                    return
+                self.preview1_seg_rgb = seg_rgb
+                self._refresh_preview1_overlay()
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _append_log(self, line: str) -> None:
         def _do() -> None:
@@ -394,17 +450,49 @@ class AppGUI:
             filetypes=[("Video", "*.mp4 *.mov *.mkv *.avi"), ("All", "*.*")]
         )
         if path:
+            self.var_input_type.set("video")
+            self._refresh_input_state()
             self.var_video_path.set(path)
+            self.var_preview_time.set("0.0")
+            self._persist_paths()
+            self._on_preview1()
 
     def _browse_images_dir(self) -> None:
         path = filedialog.askdirectory()
         if path:
+            self.var_input_type.set("images")
+            self._refresh_input_state()
             self.var_images_dir.set(path)
+            self._set_image_folder(Path(path))
+            self._persist_paths()
+            self._on_preview1()
+
+    def _on_video_path_edited(self) -> None:
+        self._persist_paths()
+        if self.var_input_type.get() != "video":
+            return
+        video_str = self.var_video_path.get().strip()
+        if not video_str:
+            return
+        if not self.var_preview_time.get().strip():
+            self.var_preview_time.set("0.0")
+        self._on_preview1()
+
+    def _on_images_dir_edited(self) -> None:
+        self._persist_paths()
+        folder_str = self.var_images_dir.get().strip()
+        if not folder_str:
+            return
+        self._set_image_folder(Path(folder_str), keep_index=False)
+        if self.var_input_type.get() != "images":
+            return
+        self._on_preview1()
 
     def _browse_output_dir(self) -> None:
         path = filedialog.askdirectory()
         if path:
             self.var_output_dir.set(path)
+            self._persist_paths()
 
     def _refresh_input_state(self) -> None:
         is_video = self.var_input_type.get() == "video"
@@ -415,6 +503,107 @@ class AppGUI:
             w.configure(state=state_video)
         for w in (self.ent_images, self.btn_images):
             w.configure(state=state_images)
+
+        for w in (self.btn_prev_image, self.btn_next_image):
+            w.configure(state=state_images)
+
+        if not is_video:
+            # Refresh file list if path is already set.
+            folder_str = self.var_images_dir.get().strip()
+            if folder_str:
+                self._set_image_folder(Path(folder_str), keep_index=True)
+        self._update_image_index_label()
+
+    def _set_image_folder(self, folder: Path, *, keep_index: bool = False) -> None:
+        if not folder.is_dir():
+            self._image_files = []
+            self._image_index = 0
+            self._update_image_index_label()
+            return
+
+        patterns = ["*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG"]
+        files: List[Path] = []
+        for pat in patterns:
+            files.extend([Path(p) for p in glob.glob(str(folder / pat))])
+        files = sorted(set(files))
+        self._image_files = files
+        if not keep_index:
+            self._image_index = 0
+        else:
+            self._image_index = max(0, min(self._image_index, max(0, len(files) - 1)))
+        self._update_image_index_label()
+
+    def _update_image_index_label(self) -> None:
+        if not hasattr(self, "lbl_image_idx"):
+            return
+        if self.var_input_type.get() != "images":
+            self.lbl_image_idx.config(text="")
+            return
+        n = len(self._image_files)
+        if n <= 0:
+            self.lbl_image_idx.config(text="(0/0)")
+            return
+        cur = self._image_files[self._image_index]
+        self.lbl_image_idx.config(text=f"({self._image_index+1}/{n}) {cur.name}")
+
+    def _on_prev_image(self) -> None:
+        if self.var_input_type.get() != "images":
+            return
+        if not self._image_files:
+            self._set_image_folder(Path(self.var_images_dir.get().strip()))
+        if not self._image_files:
+            return
+        self._image_index = (self._image_index - 1) % len(self._image_files)
+        self._update_image_index_label()
+        self._on_preview1()
+
+    def _on_next_image(self) -> None:
+        if self.var_input_type.get() != "images":
+            return
+        if not self._image_files:
+            self._set_image_folder(Path(self.var_images_dir.get().strip()))
+        if not self._image_files:
+            return
+        self._image_index = (self._image_index + 1) % len(self._image_files)
+        self._update_image_index_label()
+        self._on_preview1()
+
+    def _state_file_path(self) -> Path:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) if xdg else (Path.home() / ".config")
+        return base / "mask2dataset" / "state.json"
+
+    def _load_persisted_paths(self) -> None:
+        path = self._state_file_path()
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(raw, dict):
+            return
+        if isinstance(raw.get("video_path"), str):
+            self.var_video_path.set(raw["video_path"])
+        if isinstance(raw.get("images_dir"), str):
+            self.var_images_dir.set(raw["images_dir"])
+            self._set_image_folder(Path(raw["images_dir"]), keep_index=False)
+        if isinstance(raw.get("output_dir"), str):
+            self.var_output_dir.set(raw["output_dir"])
+
+    def _persist_paths(self) -> None:
+        path = self._state_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "video_path": self.var_video_path.get().strip(),
+            "images_dir": self.var_images_dir.get().strip(),
+            "output_dir": self.var_output_dir.get().strip(),
+        }
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            # Best-effort; ignore persistence failures.
+            return
 
     def _parse_cfg(self) -> ExtractConfig:
         try:
@@ -476,10 +665,20 @@ class AppGUI:
         folder = Path(folder_str)
         if not folder.is_dir():
             raise ValueError("画像フォルダが正しくありません")
-        first = _first_image_in_folder(folder)
-        if first is None:
+
+        # Use current selection if available; otherwise fallback to first file.
+        if not self._image_files:
+            self._set_image_folder(folder, keep_index=True)
+        if self._image_files:
+            path = self._image_files[self._image_index]
+        else:
+            path = _first_image_in_folder(folder)
+        if path is None:
             raise ValueError("画像フォルダに画像が見つかりません")
-        bgr = cv2.imread(str(first), cv2.IMREAD_COLOR)
+
+        self._update_image_index_label()
+
+        bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
             raise ValueError("画像の読み込みに失敗しました")
         return bgr, None
@@ -503,36 +702,8 @@ class AppGUI:
         self.preview_loaded_time = t
         self._refresh_preview1_overlay()
 
-        # Run segmentation in background; preview2 already uses background threads.
-        self._append_log("[info] preview1: segmenting...")
-
-        def worker() -> None:
-            try:
-                self.pipeline.engine.ensure_loaded()
-                cm = self.pipeline._ensure_class_map()  # cache if already loaded
-
-                ade = self.pipeline.engine.predict_ade_ids(pano_rgb)
-                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                    if ade_id < 0:
-                        continue
-                    lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
-
-                seg_rgb = overlay_segmentation(pano_rgb, lbl)
-            except Exception as e:
-                self.logger.log(f"preview1 segmentation failed: {e}")
-                return
-
-            def apply() -> None:
-                if req_id != self._preview1_req_id:
-                    return
-                self.preview1_seg_rgb = seg_rgb
-                self._refresh_preview1_overlay()
-
-            self.root.after(0, apply)
-
-        threading.Thread(target=worker, daemon=True).start()
+        if self.var_show_seg.get():
+            self._start_preview1_segmentation(pano_rgb, req_id=req_id)
 
         if t is None:
             self.lbl_time.config(text="")
@@ -643,6 +814,8 @@ class AppGUI:
             return
         out_dir = Path(out_dir_str)
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        self._persist_paths()
 
         def worker() -> None:
             try:
