@@ -16,6 +16,9 @@ output/
 out/
 *.log
 
+# Model weights (downloaded at runtime)
+FastSAM-*.pt
+
 # OS
 .DS_Store
 Thumbs.db
