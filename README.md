@@ -92,11 +92,9 @@ OUTPUT_DIR/
 - これは **RGBで色を塗った画像ではなく**、ピクセル値そのものがクラスIDです。
 - 値は `0,1,2,,,` と `255(ignore)` のみを使います。
 
-## Class Mapping (ADE20K -> 0..7)
+## Class Mapping (ADE20K)
 
-クラス統合は GUI では選ばず、設定ファイルを自動で読み込みます:
-
-- `config/class_map.yaml`
+クラスは`config/class_map.yaml`で設定
 
 例:
 
