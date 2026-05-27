@@ -1,4 +1,4 @@
-# ADE20K -> 0..6 (uint8) + ignore(255)
+# FastSAM prompt -> 0..6 (uint8) + ignore(255)
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
@@ -6,36 +6,40 @@
 #
 # You can edit this file while the GUI is running; restart to reload.
 
+# Prompt mapping:
+# - `prompts:` は自由なテキストです（ADE20Kのラベル名と一致する必要はありません）。
+# - 1クラスに複数プロンプトを設定できます。
+
 ignore_id: 255
-unmapped: 6     # 0..6 (send everything else to a class) or 255(ignore)
+unmapped: 6     # 0..6 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
     name: sky
-    ade20k:
+    prompts:
       - sky
   1:
     name: ceiling
-    ade20k:
+    prompts:
       - ceiling
       - canopy
       - awning
   2:
     name: facade
-    ade20k:
+    prompts:
       - building
       - house
       - skyscraper
   3:
     name: path
-    ade20k:
+    prompts:
       - floor
       - sidewalk
       - path
       - rug
   4:
     name: avoid_area
-    ade20k:
+    prompts:
       # environment / terrain
       - road
       - grass
@@ -77,21 +81,20 @@ classes:
       - sculpture
   5:
     name: person
-    ade20k:
+    prompts:
       - person
   6:
     name: unlabeled
-    ade20k:
+    prompts:
       - windowpane
       - curtain
       - cushion
       - lamp
 
 # -----------------------------------------------------------------------------
-# ADE20K label list (Mask2Former config.id2label)
+# Prompt word reference list (former ADE20K labels)
 #
 # NOTE:
-# - `ade20k:` に書く名前は、下の英名と一致する必要があります（大文字小文字は無視されます）。
 # - ここは参照用のコメントです。必要に応じて上の `classes:` を編集してください。
 #
 #  ID : English (日本語訳)

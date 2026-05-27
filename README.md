@@ -92,9 +92,12 @@ OUTPUT_DIR/
 - これは **RGBで色を塗った画像ではなく**、ピクセル値そのものがクラスIDです。
 - 値は `0,1,2,,,` と `255(ignore)` のみを使います。
 
-## Class Mapping (ADE20K)
+## Class Mapping (Prompts)
 
-クラスは`config/class_map.yaml`で設定
+クラスは `config/class_map.yaml` で設定します。
+
+- `prompts:` に自由なテキストを入れます（複数可）。
+- `feat/sam` では FastSAM が生成するマスクを、CLIP でプロンプトに近いクラスへ割り当てます。
 
 例:
 
@@ -104,11 +107,11 @@ unmapped: 6
 classes:
   0:
     name: sky
-    ade20k: [sky]
+    prompts: ["sky", "blue sky"]
   5:
     name: person
-    ade20k: [person]
+    prompts: ["person", "human"]
   6:
     name: unlabeled
-    ade20k: [windowpane, curtain, cushion, lamp]
+    prompts: ["window", "curtain", "lamp"]
 ```

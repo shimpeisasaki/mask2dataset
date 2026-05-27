@@ -1,4 +1,4 @@
-"""Dataset generator for 360° images/videos using Mask2Former (ADE20K).
+"""Dataset generator for 360° images/videos using FastSAM + prompts.
 
 Run GUI:
     python -m src.app

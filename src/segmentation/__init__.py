@@ -1,1 +1,1 @@
-"""Segmentation utilities (Mask2Former + class mapping)."""
+"""Segmentation utilities (FastSAM + prompt class mapping)."""

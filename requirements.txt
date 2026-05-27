@@ -10,3 +10,6 @@ transformers>=4.44.0,<6
 safetensors>=0.4.4
 scipy>=1.10.0
 timm>=1.0.9
+
+# FastSAM (feat/sam)
+ultralytics>=8.2.0

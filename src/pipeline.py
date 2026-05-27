@@ -12,7 +12,7 @@ from PIL import Image
 
 from src.dataset.writer import MMSegDatasetWriter
 from src.segmentation.class_map import ClassMap
-from src.segmentation.mask2former import Mask2FormerADEEngine
+from src.segmentation.fastsam import FastSAMPromptEngine
 from src.segmentation.palette import default_palette_8
 from src.utils.logging import Logger
 from src.v360 import V360Projector, ViewSpec
@@ -115,17 +115,15 @@ class GeneratorPipeline:
     def __init__(self, *, ffmpeg: str = "ffmpeg", logger: Optional[Logger] = None) -> None:
         self.logger = logger or Logger()
         self.projector = V360Projector(ffmpeg=ffmpeg)
-        self.engine = Mask2FormerADEEngine()
+        self.engine = FastSAMPromptEngine()
         self.class_map_path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
         self._class_map: Optional[ClassMap] = None
 
     def _load_class_map(self) -> ClassMap:
-        self.engine.ensure_loaded()
-        id2label = self.engine.id2label
         path = self.class_map_path
         if not path.exists():
             raise FileNotFoundError(f"class map yaml not found: {path}")
-        cm = ClassMap.from_yaml(path, id2label)
+        cm = ClassMap.from_yaml(path)
         self._class_map = cm
         self.logger.log(f"Loaded class_map: {cm.summarize()}")
         return cm
@@ -146,15 +144,7 @@ class GeneratorPipeline:
         pano_bgr = resize_equirect_for_speed(input_bgr, cfg.out_size)
         pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
 
-        ade = self.engine.predict_ade_ids(pano_rgb)
-
-        # Map to dataset ids (uint8)
-        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-        out = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-        for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-            if ade_id < 0:
-                continue
-            out[ade == int(ade_id)] = np.uint8(int(dataset_id))
+        out = self.engine.predict_dataset_ids(pano_rgb, cm)
 
         up_specs, mid_specs, down_specs = build_view_specs(cfg)
 
@@ -225,14 +215,7 @@ class GeneratorPipeline:
 
             pano_bgr = resize_equirect_for_speed(bgr, cfg.out_size)
             pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
-            ade = self.engine.predict_ade_ids(pano_rgb)
-
-            unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-            pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-            for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                if ade_id < 0:
-                    continue
-                pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
+            pano_label = self.engine.predict_dataset_ids(pano_rgb, cm)
 
             base = path.stem
 
@@ -317,14 +300,7 @@ class GeneratorPipeline:
 
             pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
             pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
-            ade = self.engine.predict_ade_ids(pano_rgb)
-
-            unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-            pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-            for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                if ade_id < 0:
-                    continue
-                pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
+            pano_label = self.engine.predict_dataset_ids(pano_rgb, cm)
 
             with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
                 td_path = Path(td)

@@ -79,7 +79,7 @@ class Tile:
 class AppGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("360 Dataset Generator (Mask2Former ADE20K)")
+        self.root.title("360 Dataset Generator (FastSAM + Prompts)")
 
         self.var_input_type = tk.StringVar(value="video")  # video | images
 
@@ -416,17 +416,8 @@ class AppGUI:
 
         def worker() -> None:
             try:
-                self.pipeline.engine.ensure_loaded()
                 cm = self.pipeline._ensure_class_map()  # cache if already loaded
-
-                ade = self.pipeline.engine.predict_ade_ids(pano_rgb)
-                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                    if ade_id < 0:
-                        continue
-                    lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
-
+                lbl = self.pipeline.engine.predict_dataset_ids(pano_rgb, cm)
                 seg_rgb = overlay_segmentation(pano_rgb, lbl)
             except Exception as e:
                 self.logger.log(f"preview1 segmentation failed: {e}")
