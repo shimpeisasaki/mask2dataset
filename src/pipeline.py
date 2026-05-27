@@ -236,6 +236,9 @@ class GeneratorPipeline:
 
             base = path.stem
 
+            # Choose split per source image to avoid leakage across train/val.
+            split = writer.choose_split(rng.random())
+
             with tempfile.TemporaryDirectory(prefix="v360_gen_") as td:
                 td_path = Path(td)
                 pano_path = td_path / "pano.png"
@@ -258,7 +261,6 @@ class GeneratorPipeline:
                     if np.any(bad):
                         lbl[bad] = 255
 
-                    split = writer.choose_split(rng.random())
                     filename = f"{base}_{src_idx:06d}_{spec.name}.png"
                     writer.save_image(split, filename, rgb)
                     writer.save_label(split, filename, lbl)
@@ -310,6 +312,9 @@ class GeneratorPipeline:
                 continue
             next_t += step_s
 
+            # Choose split per source frame to avoid leakage across train/val.
+            split = writer.choose_split(rng.random())
+
             pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
             pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
             ade = self.engine.predict_ade_ids(pano_rgb)
@@ -341,7 +346,6 @@ class GeneratorPipeline:
                     if np.any(bad):
                         lbl[bad] = 255
 
-                    split = writer.choose_split(rng.random())
                     filename = f"frame_{saved_idx:06d}_{spec.name}.png"
                     writer.save_image(split, filename, rgb)
                     writer.save_label(split, filename, lbl)

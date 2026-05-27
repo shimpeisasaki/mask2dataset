@@ -13,6 +13,21 @@ GUIは1ウィンドウで、
 - GUI用: Tkinter（Linuxだと `python3-tk` が別パッケージのことが多い）
 - Pythonパッケージ: `pip install -r requirements.txt`
 
+### 実行環境の注意
+
+- **初回実行時は Mask2Former のモデルをダウンロード**します（ネット接続と十分なディスク容量が必要）。
+- GPUがある場合は自動でCUDAを使います（CPUでも動きますがかなり遅くなりがちです）。
+- GUIはディスプレイが必要です（ヘッドレス環境だと `TclError: no display name` になり得ます）。
+- 動画入力は OpenCV のデコーダ事情で読めない場合があります。その場合は `ffmpeg` で一般的な形式(H.264等)へ変換するか、画像フォルダ入力を使ってください。
+
+### 簡易セルフチェック
+
+```bash
+ffmpeg -hide_banner -filters | grep v360
+python -c "import cv2, PIL, yaml, numpy, tkinter"
+python -c "import torch; print(torch.__version__, 'cuda=', torch.cuda.is_available())"
+```
+
 ### OS packages install example (Ubuntu/Debian)
 
 ```bash
@@ -67,6 +82,11 @@ OUTPUT_DIR/
 └── ann_dir/
     ├── train/
     └── val/
+
+### train/val の分割
+
+- 分割は `val_ratio=0.2` のランダム（seed固定）です。
+- **同一の元画像/元フレームから生成される複数ビューは、同じ split (train/val) に入る** ようにしています（リーク防止）。
 ```
 
 ### 重要: ラベルPNGは「クラスID画像」

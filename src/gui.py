@@ -341,8 +341,11 @@ class AppGUI:
 
     def _load_preview1_bgr(self) -> Tuple[np.ndarray, Optional[float]]:
         if self.var_input_type.get() == "video":
-            video = Path(self.var_video_path.get().strip())
-            if not video.exists():
+            video_str = self.var_video_path.get().strip()
+            if not video_str:
+                raise ValueError("動画パスが未指定です")
+            video = Path(video_str)
+            if not video.is_file():
                 raise ValueError("動画パスが正しくありません")
             try:
                 t = float(self.var_preview_time.get())
@@ -353,8 +356,11 @@ class AppGUI:
             bgr = _load_video_frame_with_ffmpeg(self.pipeline.projector.ffmpeg, video, t)
             return bgr, t
 
-        folder = Path(self.var_images_dir.get().strip())
-        if not folder.exists():
+        folder_str = self.var_images_dir.get().strip()
+        if not folder_str:
+            raise ValueError("画像フォルダが未指定です")
+        folder = Path(folder_str)
+        if not folder.is_dir():
             raise ValueError("画像フォルダが正しくありません")
         first = _first_image_in_folder(folder)
         if first is None:
@@ -482,17 +488,21 @@ class AppGUI:
             messagebox.showerror("エラー", str(e))
             return
 
-        out_dir = Path(self.var_output_dir.get().strip())
-        if not out_dir:
+        out_dir_str = self.var_output_dir.get().strip()
+        if not out_dir_str:
             messagebox.showerror("エラー", "出力フォルダを指定してください")
             return
+        out_dir = Path(out_dir_str)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         def worker() -> None:
             try:
                 if self.var_input_type.get() == "video":
-                    video = Path(self.var_video_path.get().strip())
-                    if not video.exists():
+                    video_str = self.var_video_path.get().strip()
+                    if not video_str:
+                        raise ValueError("動画パスが未指定です")
+                    video = Path(video_str)
+                    if not video.is_file():
                         raise ValueError("動画パスが正しくありません")
                     try:
                         fps = float(self.var_fps.get())
@@ -502,8 +512,11 @@ class AppGUI:
                         raise ValueError("FPSは0より大きくしてください")
                     self.pipeline.generate_dataset_from_video(video_path=video, output_root=out_dir, fps=fps, cfg=cfg)
                 else:
-                    folder = Path(self.var_images_dir.get().strip())
-                    if not folder.exists():
+                    folder_str = self.var_images_dir.get().strip()
+                    if not folder_str:
+                        raise ValueError("画像フォルダが未指定です")
+                    folder = Path(folder_str)
+                    if not folder.is_dir():
                         raise ValueError("画像フォルダが正しくありません")
                     patterns = ["*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG"]
                     files: List[Path] = []
