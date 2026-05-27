@@ -11,11 +11,13 @@ from typing import Callable, List, Optional, Tuple
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
+import yaml
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from src.pipeline import ExtractConfig, GeneratorPipeline, PreviewResult
+from src.pipeline import ExtractConfig, GeneratorPipeline, PreviewResult, overlay_segmentation, resize_equirect_for_speed
+from src.segmentation.palette import default_palette_8
 from src.utils.logging import Logger
 
 
@@ -103,7 +105,10 @@ class AppGUI:
 
         self.preview1_photo: Optional[ImageTk.PhotoImage] = None
         self.preview1_rgb: Optional[np.ndarray] = None
+        self.preview1_seg_rgb: Optional[np.ndarray] = None
         self.preview_loaded_time: Optional[float] = None
+
+        self._preview1_req_id: int = 0
 
         self.tiles_up: List[Tile] = []
         self.tiles_mid: List[Tile] = []
@@ -114,13 +119,56 @@ class AppGUI:
         self.logger = Logger(sink=self._append_log)
         self.pipeline = GeneratorPipeline(logger=self.logger)
 
+        self._build_legend()
+
         self._refresh_input_state()
 
     def _build_layout(self) -> None:
         self.root.geometry("1300x900")
 
-        main = ttk.Frame(self.root)
-        main.pack(fill="both", expand=True)
+        # Scrollable root container
+        outer = ttk.Frame(self.root)
+        outer.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        vbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+
+        vbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        self._scroll_canvas = canvas
+        self._scroll_outer = outer
+
+        main = ttk.Frame(canvas)
+        self._scroll_main = main
+        window_id = canvas.create_window((0, 0), window=main, anchor="nw")
+        self._scroll_window_id = window_id
+
+        def _on_configure(_e: tk.Event) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _on_canvas_configure(_e: tk.Event) -> None:
+            # Keep content width in sync with canvas width.
+            canvas.itemconfigure(window_id, width=canvas.winfo_width())
+
+        main.bind("<Configure>", _on_configure)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event: tk.Event) -> None:
+            # Linux: Button-4/5. Windows/macOS: MouseWheel.
+            if getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-2, "units")
+            elif getattr(event, "num", None) == 5:
+                canvas.yview_scroll(2, "units")
+            else:
+                delta = int(-1 * (getattr(event, "delta", 0) / 120))
+                if delta != 0:
+                    canvas.yview_scroll(delta, "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind_all("<Button-4>", _on_mousewheel)
+        canvas.bind_all("<Button-5>", _on_mousewheel)
 
         # Top controls
         frm_top = ttk.Frame(main)
@@ -175,18 +223,16 @@ class AppGUI:
         self.ent_preview_time = ttk.Entry(row4, textvariable=self.var_preview_time, width=10)
         self.ent_preview_time.pack(side="left")
 
-        # Preview1 + settings
+        # Preview1 + (settings + legend) + preview2
         body = ttk.Frame(main)
         body.pack(fill="both", expand=True, padx=10, pady=(0, 8))
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
 
-        right = ttk.Frame(body)
-        right.pack(side="right", fill="y")
-
         frm_p1 = ttk.LabelFrame(left, text="プレビュー1 (正面指定: yawスライダー)")
         frm_p1.pack(fill="x", padx=0, pady=6)
+        self.frm_p1 = frm_p1
 
         rowp = ttk.Frame(frm_p1)
         rowp.pack(fill="x", padx=8, pady=4)
@@ -209,8 +255,17 @@ class AppGUI:
         self.lbl_preview1 = tk.Label(frm_p1, borderwidth=1, relief="solid")
         self.lbl_preview1.pack(fill="x", padx=8, pady=(0, 8))
 
-        frm_set = ttk.LabelFrame(right, text="切り出し設定")
-        frm_set.pack(fill="x", padx=6, pady=6)
+        frm_mid = ttk.Frame(left)
+        frm_mid.pack(fill="x", padx=0, pady=(0, 6))
+        frm_mid.grid_columnconfigure(0, weight=1)
+        frm_mid.grid_columnconfigure(1, weight=1)
+
+        frm_set = ttk.LabelFrame(frm_mid, text="切り出し設定")
+        frm_set.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
+
+        frm_legend = ttk.LabelFrame(frm_mid, text="クラス凡例")
+        frm_legend.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        self.frm_legend = frm_legend
 
         r0 = ttk.Frame(frm_set)
         r0.pack(fill="x", padx=8, pady=4)
@@ -241,12 +296,13 @@ class AppGUI:
 
         frm_p2 = ttk.LabelFrame(left, text="プレビュー2")
         frm_p2.pack(fill="both", expand=True, padx=0, pady=6)
+        self.frm_p2 = frm_p2
 
         rowp2 = ttk.Frame(frm_p2)
         rowp2.pack(fill="x", padx=8, pady=4)
         ttk.Button(rowp2, text="プレビュー2生成", command=self._on_preview2).pack(side="left")
         ttk.Checkbutton(
-            rowp2, text="セグメンテーション表示", variable=self.var_show_seg, command=self._refresh_preview2_images
+            rowp2, text="セグメンテーション表示", variable=self.var_show_seg, command=self._on_toggle_show_seg
         ).pack(side="left", padx=(14, 0))
 
         # Rows: up (max 7), mid (max 6), down (max 6)
@@ -265,6 +321,64 @@ class AppGUI:
         frm_log.pack(fill="both", expand=False, padx=10, pady=(0, 10))
         self.txt_log = tk.Text(frm_log, height=10, state="disabled")
         self.txt_log.pack(fill="both", expand=True, padx=8, pady=6)
+
+    def _read_class_names_from_yaml(self) -> List[str]:
+        """Return names for dataset ids 0..7 from config/class_map.yaml (no model load)."""
+        path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
+        try:
+            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception:
+            raw = None
+
+        names = [f"class{i}" for i in range(8)]
+        if isinstance(raw, dict):
+            classes = raw.get("classes")
+            if isinstance(classes, dict):
+                for k, spec in classes.items():
+                    try:
+                        did = int(k)
+                    except Exception:
+                        continue
+                    if 0 <= did <= 7 and isinstance(spec, dict) and "name" in spec:
+                        names[did] = str(spec.get("name"))
+        return names
+
+    def _build_legend(self) -> None:
+        """Populate legend frame with class name + color swatch."""
+        frm = getattr(self, "frm_legend", None)
+        if frm is None:
+            return
+
+        for child in frm.winfo_children():
+            child.destroy()
+
+        palette = default_palette_8()
+        names = self._read_class_names_from_yaml()
+
+        grid = ttk.Frame(frm)
+        grid.pack(fill="x", padx=8, pady=6)
+
+        # Keep this compact for side-by-side layout.
+        cols = 2
+        for cls_id in range(8):
+            r = cls_id // cols
+            c = cls_id % cols
+
+            item = ttk.Frame(grid)
+            item.grid(row=r, column=c, sticky="w", padx=(0, 16), pady=2)
+
+            rr, gg, bb = palette[cls_id]
+            color_hex = f"#{rr:02x}{gg:02x}{bb:02x}"
+            sw = tk.Canvas(item, width=16, height=16, highlightthickness=0)
+            # Outline helps when fill is black.
+            sw.create_rectangle(1, 1, 15, 15, fill=color_hex, outline="#ffffff")
+            sw.pack(side="left")
+
+            ttk.Label(item, text=f"{cls_id}: {names[cls_id]}").pack(side="left", padx=(6, 0))
+
+    def _on_toggle_show_seg(self) -> None:
+        self._refresh_preview1_overlay()
+        self._refresh_preview2_images()
 
     def _append_log(self, line: str) -> None:
         def _do() -> None:
@@ -378,12 +492,47 @@ class AppGUI:
             messagebox.showerror("エラー", str(e))
             return
 
+        self._preview1_req_id += 1
+        req_id = self._preview1_req_id
+
         # Keep the base RGB for overlay refresh
-        pano_bgr = cv2.resize(bgr, (cfg.out_size * 2, cfg.out_size), interpolation=cv2.INTER_AREA)
+        pano_bgr = resize_equirect_for_speed(bgr, cfg.out_size)
         pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
         self.preview1_rgb = pano_rgb
+        self.preview1_seg_rgb = None
         self.preview_loaded_time = t
         self._refresh_preview1_overlay()
+
+        # Run segmentation in background; preview2 already uses background threads.
+        self._append_log("[info] preview1: segmenting...")
+
+        def worker() -> None:
+            try:
+                self.pipeline.engine.ensure_loaded()
+                cm = self.pipeline._ensure_class_map()  # cache if already loaded
+
+                ade = self.pipeline.engine.predict_ade_ids(pano_rgb)
+                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
+                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                    if ade_id < 0:
+                        continue
+                    lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
+
+                seg_rgb = overlay_segmentation(pano_rgb, lbl)
+            except Exception as e:
+                self.logger.log(f"preview1 segmentation failed: {e}")
+                return
+
+            def apply() -> None:
+                if req_id != self._preview1_req_id:
+                    return
+                self.preview1_seg_rgb = seg_rgb
+                self._refresh_preview1_overlay()
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
 
         if t is None:
             self.lbl_time.config(text="")
@@ -394,7 +543,7 @@ class AppGUI:
         if self.preview1_rgb is None:
             return
 
-        rgb = self.preview1_rgb
+        rgb = self.preview1_seg_rgb if (self.var_show_seg.get() and self.preview1_seg_rgb is not None) else self.preview1_rgb
         h, w = rgb.shape[:2]
         yaw0 = float(self.var_yaw_offset.get())
         yaw_disp = (yaw0 + 180.0) % 360.0
