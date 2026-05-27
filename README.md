@@ -99,6 +99,11 @@ OUTPUT_DIR/
 - `prompts:` に自由なテキストを入れます（複数可）。
 - `feat/sam` では FastSAM が生成するマスクを、CLIP でプロンプトに近いクラスへ割り当てます。
 
+必要なもの（feat/sam）:
+
+- `pip install -r requirements.txt`（`ultralytics` を含みます）
+- FastSAM の重みファイル（例: `FastSAM-s.pt`）
+
 例:
 
 ```yaml
