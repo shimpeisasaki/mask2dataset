@@ -24,6 +24,26 @@ def _mask_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
     return x0, y0, x1, y1
 
 
+def _extract_embedding_tensor(torch: object, obj: object) -> "object":
+    """Return a torch.Tensor-like embedding from various transformers outputs."""
+    Tensor = getattr(torch, "Tensor", None)
+    if Tensor is not None and isinstance(obj, Tensor):
+        return obj
+
+    # Common outputs
+    for attr in ("text_embeds", "image_embeds", "pooler_output"):
+        v = getattr(obj, attr, None)
+        if Tensor is not None and isinstance(v, Tensor):
+            return v
+
+    # Fallback: use CLS token of last_hidden_state
+    v = getattr(obj, "last_hidden_state", None)
+    if Tensor is not None and isinstance(v, Tensor) and v.ndim >= 2:
+        return v[:, 0, :]
+
+    raise TypeError(f"Unexpected CLIP features type: {type(obj)}")
+
+
 @dataclass
 class FastSAMPromptEngine:
     """FastSAM instance masks + CLIP prompt classification -> semantic label map.
@@ -222,6 +242,7 @@ class FastSAMPromptEngine:
 
         with torch.inference_mode():
             feats = model.get_text_features(**inputs)
+        feats = _extract_embedding_tensor(torch, feats)
         feats = feats / feats.norm(dim=-1, keepdim=True).clamp(min=1e-6)
         return feats.detach().to("cpu").numpy().astype(np.float32)
 
@@ -241,6 +262,7 @@ class FastSAMPromptEngine:
 
         with torch.inference_mode():
             feats = model.get_image_features(**inputs)
+        feats = _extract_embedding_tensor(torch, feats)
         feats = feats / feats.norm(dim=-1, keepdim=True).clamp(min=1e-6)
         return feats.detach().to("cpu").numpy().astype(np.float32)
 
