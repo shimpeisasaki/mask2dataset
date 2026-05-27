@@ -9,7 +9,26 @@ GUIは1ウィンドウで、
 ## Requirements
 
 - `ffmpeg` (v360フィルタが有効なもの)
+- Python 3.10+（`venv` が使えること）
+- GUI用: Tkinter（Linuxだと `python3-tk` が別パッケージのことが多い）
 - Pythonパッケージ: `pip install -r requirements.txt`
+
+### OS packages install example (Ubuntu/Debian)
+
+```bash
+sudo apt update
+sudo apt install -y \
+  ffmpeg \
+  git \
+  python3 python3-venv python3-pip python3-tk \
+  libgl1 libglib2.0-0
+```
+
+`ffmpeg` が v360 を持っているか確認:
+
+```bash
+ffmpeg -hide_banner -filters | grep v360
+```
 
 ## Quick Setup (venv)
 
