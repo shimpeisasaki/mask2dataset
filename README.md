@@ -1,4 +1,4 @@
-# 360 Dataset Generator (Mask2Former ADE20K)
+# mask2dataset (Mask2Former ADE20K)
 
 360°の画像フォルダ or 360°動画から、Mask2Former(ADE20K)でセグメンテーションした学習用データセットを生成します。
 
@@ -14,7 +14,8 @@ GUIは1ウィンドウで、
 ## Quick Setup (venv)
 
 ```bash
-cd /home/uedalab/wander2locate_ws/sam-dataset-generator
+git clone git@github.com:shimpeisasaki/mask2dataset.git
+cd mask2dataset
 bash scripts/setup_venv.sh .venv
 source .venv/bin/activate
 ```
@@ -65,12 +66,15 @@ OUTPUT_DIR/
 
 ```yaml
 ignore_id: 255
-unmapped: 255
+unmapped: 7
 classes:
   0:
-    name: obstacle
-    ade20k: [wall, sea, bookcase, towel, radiator]
-  4:
-    name: walkway
-    ade20k: [road, sidewalk, floor]
+    name: sky
+    ade20k: [sky]
+  6:
+    name: person
+    ade20k: [person]
+  7:
+    name: unlabeled
+    ade20k: [windowpane, curtain, cushion, lamp]
 ```
