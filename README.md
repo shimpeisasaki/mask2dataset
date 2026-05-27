@@ -100,15 +100,15 @@ OUTPUT_DIR/
 
 ```yaml
 ignore_id: 255
-unmapped: 7
+unmapped: 6
 classes:
   0:
     name: sky
     ade20k: [sky]
-  6:
+  5:
     name: person
     ade20k: [person]
-  7:
+  6:
     name: unlabeled
     ade20k: [windowpane, curtain, cushion, lamp]
 ```

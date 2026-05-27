@@ -1,4 +1,4 @@
-# ADE20K -> 0..7 (uint8) + ignore(255)
+# ADE20K -> 0..6 (uint8) + ignore(255)
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
@@ -7,7 +7,7 @@
 # You can edit this file while the GUI is running; restart to reload.
 
 ignore_id: 255
-unmapped: 7     # 0..7 (send everything else to a class) or 255(ignore)
+unmapped: 6     # 0..6 (send everything else to a class) or 255(ignore)
 
 classes:
   0:
@@ -27,18 +27,13 @@ classes:
       - house
       - skyscraper
   3:
-    name: entrance
-    ade20k:
-      - door
-      - screen door
-  4:
     name: path
     ade20k:
       - floor
       - sidewalk
       - path
       - rug
-  5:
+  4:
     name: avoid_area
     ade20k:
       # environment / terrain
@@ -64,6 +59,8 @@ classes:
       - pole
 
       # obstacles / street furniture
+      - door
+      - screen door
       - car
       - truck
       - bus
@@ -78,11 +75,11 @@ classes:
       - streetlight
       - ashcan
       - sculpture
-  6:
+  5:
     name: person
     ade20k:
       - person
-  7:
+  6:
     name: unlabeled
     ade20k:
       - windowpane

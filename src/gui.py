@@ -341,15 +341,15 @@ class AppGUI:
         self.txt_log = tk.Text(frm_log, height=10, state="disabled")
         self.txt_log.pack(fill="both", expand=True, padx=8, pady=6)
 
-    def _read_class_names_from_yaml(self) -> List[str]:
-        """Return names for dataset ids 0..7 from config/class_map.yaml (no model load)."""
+    def _read_class_names_from_yaml(self) -> Dict[int, str]:
+        """Return {dataset_id: name} from config/class_map.yaml (no model load)."""
         path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         except Exception:
             raw = None
 
-        names = [f"class{i}" for i in range(8)]
+        out: Dict[int, str] = {}
         if isinstance(raw, dict):
             classes = raw.get("classes")
             if isinstance(classes, dict):
@@ -358,9 +358,12 @@ class AppGUI:
                         did = int(k)
                     except Exception:
                         continue
-                    if 0 <= did <= 7 and isinstance(spec, dict) and "name" in spec:
-                        names[did] = str(spec.get("name"))
-        return names
+                    if not (0 <= did <= 7):
+                        continue
+                    if not isinstance(spec, dict):
+                        continue
+                    out[did] = str(spec.get("name", f"class{did}"))
+        return dict(sorted(out.items(), key=lambda kv: kv[0]))
 
     def _build_legend(self) -> None:
         """Populate legend frame with class name + color swatch."""
@@ -379,9 +382,12 @@ class AppGUI:
 
         # Keep this compact for side-by-side layout.
         cols = 2
-        for cls_id in range(8):
-            r = cls_id // cols
-            c = cls_id % cols
+        for i, (cls_id, cls_name) in enumerate(names.items()):
+            if not (0 <= cls_id < len(palette)):
+                continue
+
+            r = i // cols
+            c = i % cols
 
             item = ttk.Frame(grid)
             item.grid(row=r, column=c, sticky="w", padx=(0, 16), pady=2)
@@ -393,7 +399,7 @@ class AppGUI:
             sw.create_rectangle(1, 1, 15, 15, fill=color_hex, outline="#ffffff")
             sw.pack(side="left")
 
-            ttk.Label(item, text=f"{cls_id}: {names[cls_id]}").pack(side="left", padx=(6, 0))
+            ttk.Label(item, text=f"{cls_id}: {cls_name}").pack(side="left", padx=(6, 0))
 
     def _on_toggle_show_seg(self) -> None:
         if self.var_show_seg.get() and self.preview1_rgb is not None and self.preview1_seg_rgb is None:
