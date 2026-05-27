@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+.venv-ultrafast/
+
+# IDE
+.vscode/
+
+# Runtime outputs
+output/
+out/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Safety: never commit git backup folders
+.git.backup_*/
+_git_backup_*/
