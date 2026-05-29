@@ -1,4 +1,4 @@
-# FastSAM prompt -> 0..5 (uint8) + ignore(255)
+# FastSAM prompt -> 0..3 (uint8) + ignore(255)
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
@@ -11,7 +11,7 @@
 # - 1クラスに複数プロンプトを設定できます。
 
 ignore_id: 255
-unmapped: 255   # 0..5 (send everything else to this class) or 255(ignore)
+unmapped: 255   # 0..3 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
@@ -57,23 +57,4 @@ classes:
       - blue sky
       - cloudy sky
       - outdoor sky
-  4:
-    name: ceiling
-    prompts:
-      - ceiling
-      - indoor ceiling
-      - ceiling panel
-      - roof ceiling
-  5:
-    name: entrance
-    prompts:
-      - main entrance
-      - front entrance
-      - building entrance
-      - entrance
-      - lobby entrance
-      - automatic door
-      - automatic sliding door
-      - glass entrance
-      - entrance gate
 
