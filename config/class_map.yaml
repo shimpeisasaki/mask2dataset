@@ -15,21 +15,21 @@ unmapped: 4     # 0..5 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
-    name: 空
+    name: sky
     prompts:
       - sky
       - blue sky
       - cloudy sky
       - outdoor sky
   1:
-    name: 天井
+    name: ceiling
     prompts:
       - ceiling
       - indoor ceiling
       - ceiling panel
       - roof ceiling
   2:
-    name: 建物外観
+    name: building_exterior
     prompts:
       - building exterior
       - building facade
@@ -37,7 +37,7 @@ classes:
       - storefront
       - exterior wall
   3:
-    name: 走行可能
+    name: traversable
     prompts:
       - sidewalk
       - pavement
@@ -50,7 +50,7 @@ classes:
       - ramp
       - slope
   4:
-    name: 走行禁止
+    name: no_go
     prompts:
       # areas the robot should NOT drive on
       - road
@@ -83,7 +83,7 @@ classes:
       - plant
       - rock
   5:
-    name: 人
+    name: person
     prompts:
       - person
       - human
