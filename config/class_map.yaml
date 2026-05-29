@@ -29,13 +29,26 @@ classes:
       - ceiling panel
       - roof ceiling
   2:
-    name: building_exterior
+    name: gnss_candidate
     prompts:
-      - building exterior
-      - building facade
-      - house exterior
-      - storefront
-      - exterior wall
+      # Places you may want to move toward to regain GNSS:
+      # - main building entrance (not emergency/fire doors)
+      # - outdoor open spaces such as plazas/courtyards
+      - main entrance
+      - front entrance
+      - building entrance
+      - entrance
+      - lobby entrance
+      - automatic door
+      - automatic sliding door
+      - glass entrance
+      - entrance gate
+      - plaza
+      - outdoor plaza
+      - courtyard
+      - outdoor square
+      - open area
+      - open outdoor space
   3:
     name: traversable
     prompts:
