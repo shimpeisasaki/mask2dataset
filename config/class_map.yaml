@@ -1,4 +1,4 @@
-# FastSAM prompt -> 0..3 (uint8) + ignore(255)
+# FastSAM prompt -> 0..2 (uint8) + ignore(255)
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
@@ -11,7 +11,7 @@
 # - 1クラスに複数プロンプトを設定できます。
 
 ignore_id: 255
-unmapped: 255   # 0..3 (send everything else to this class) or 255(ignore)
+unmapped: 255   # 0..2 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
@@ -25,19 +25,6 @@ classes:
       - woman
       - child
   1:
-    name: black_paved_road
-    prompts:
-      - road
-      - street
-      - asphalt road
-      - vehicle road
-      - parking lot
-      - driveway
-      - black road
-      - black asphalt
-      - black paved road
-      - paved road
-  2:
     name: traversable
     prompts:
       - sidewalk
@@ -50,7 +37,7 @@ classes:
       - concrete floor
       - ramp
       - slope
-  3:
+  2:
     name: sky
     prompts:
       - sky
