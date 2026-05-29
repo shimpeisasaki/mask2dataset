@@ -54,8 +54,6 @@ classes:
 #   - person — 人
 #
 # 1: avoid (走行禁止)
-#   - building — 建物
-#   - house — 家
 #   - grass — 草地
 #   - earth — 土地／地面
 #   - field — 畑／フィールド
@@ -63,14 +61,12 @@ classes:
 #   - mountain — 山
 #   - hill — 丘
 #   - rock — 岩
-#   - wall — 壁
 #   - stairs — 階段
 #   - step — 段差
-#   - fence — 柵
-#   - pole — ポール／柱
-#   - door — ドア
-#   - tree — 木
-#   - plant — 植物
+#   - water — 水
+#   - stairway — 階段通路
+#   - dirt track — 土道
+#   - runway — 滑走路
 #
 # 2: path (走行可能)
 #   - road — 道路
@@ -83,6 +79,15 @@ classes:
 #
 # 4: unlabeled (アンラベル / その他)
 #   以下は `unlabeled` に分類される ADE20K ラベル（英名 — 日本語）:
+#   - column — 柱
+#   - plant — 植物
+#   - fence — 柵
+#   - pole — ポール／柱
+#   - door — ドア
+#   - tree — 木
+#   - wall — 壁
+#   - building — 建物
+#   - house — 家
 #   - ceiling — 天井
 #   - bed — ベッド
 #   - windowpane — 窓ガラス
@@ -91,7 +96,6 @@ classes:
 #   - curtain — カーテン
 #   - chair — 椅子
 #   - car — 車
-#   - water — 水
 #   - painting — 絵画
 #   - sofa — ソファ
 #   - shelf — 棚
@@ -108,7 +112,6 @@ classes:
 #   - cushion — クッション
 #   - base — 台座
 #   - box — 箱
-#   - column — 柱
 #   - signboard — 看板
 #   - chest of drawers — 引き出し付き収納
 #   - counter — カウンター
@@ -117,12 +120,10 @@ classes:
 #   - fireplace — 暖炉
 #   - refrigerator — 冷蔵庫
 #   - grandstand — 観客席
-#   - runway — 滑走路
 #   - case — ケース
 #   - pool table — ビリヤード台
 #   - pillow — 枕
 #   - screen door — 網戸
-#   - stairway — 階段通路
 #   - river — 川
 #   - bridge — 橋
 #   - bookcase — 本棚
@@ -153,7 +154,6 @@ classes:
 #   - booth — ブース
 #   - television receiver — テレビ受像機
 #   - airplane — 飛行機
-#   - dirt track — 土道
 #   - apparel — 衣類
 #   - land — 陸地
 #   - bannister — 手すり（階段）
