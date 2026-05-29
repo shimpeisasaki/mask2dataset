@@ -2,7 +2,7 @@
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
-# - ピクセル値そのものがクラスIDです (0..7, 255=ignore)
+# - ピクセル値そのものがクラスIDです (0..6, 255=ignore)
 #
 # You can edit this file while the GUI is running; restart to reload.
 
@@ -15,81 +15,98 @@ unmapped: 6     # 0..6 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
-    name: sky
+    name: 空
     prompts:
       - sky
+      - blue sky
+      - cloudy sky
+      - outdoor sky
   1:
-    name: ceiling
+    name: 天井
     prompts:
       - ceiling
-      - canopy
-      - awning
+      - indoor ceiling
+      - ceiling panel
+      - roof ceiling
   2:
-    name: facade
+    name: 建物外観
     prompts:
-      - building
-      - house
-      - skyscraper
+      - building exterior
+      - building facade
+      - house exterior
+      - storefront
+      - exterior wall
   3:
-    name: path
+    name: 走行可能
     prompts:
-      - floor
       - sidewalk
+      - pavement
+      - walkway
       - path
-      - rug
+      - campus path
+      - floor
+      - tile floor
+      - concrete floor
+      - ramp
+      - slope
   4:
-    name: avoid_area
+    name: 走行禁止
     prompts:
-      # environment / terrain
+      # areas the robot should NOT drive on
       - road
+      - street
+      - asphalt road
+      - vehicle road
+      - parking lot
+      - driveway
       - grass
-      - earth
-      - field
+      - lawn
+      - dirt
+      - mud
       - sand
-      - mountain
-      - hill
-      - rock
-      - tree
-      - plant
-
-      # level changes / structures
-      - wall
+      - puddle
+      - water
+      - wet floor
       - stairs
-      - stairway
+      - staircase
       - step
+  5:
+    name: 人
+    prompts:
+      - person
+      - human
+      - pedestrian
+      - people
+      - man
+      - woman
+      - child
+  6:
+    name: 障害物
+    prompts:
+      # physical obstacles / unknown obstacles
+      - obstacle
+      - wall
       - fence
       - railing
-      - column
       - pole
-
-      # obstacles / street furniture
+      - column
       - door
-      - screen door
+      - tree
+      - plant
+      - rock
+      - bench
+      - chair
+      - table
+      - sign
+      - signboard
+      - traffic light
+      - street light
+      - trash can
+      - bicycle
       - car
       - truck
       - bus
       - van
-      - minibike
-      - bicycle
-      - bench
-      - chair
-      - table
-      - signboard
-      - traffic light
-      - streetlight
-      - ashcan
-      - sculpture
-  5:
-    name: person
-    prompts:
-      - person
-  6:
-    name: unlabeled
-    prompts:
-      - windowpane
-      - curtain
-      - cushion
-      - lamp
 
 # -----------------------------------------------------------------------------
 # Prompt word reference list (former ADE20K labels)
