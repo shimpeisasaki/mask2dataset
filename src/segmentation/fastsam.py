@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from src.segmentation.class_map import ClassMap
@@ -140,6 +141,7 @@ class FastSAMPromptEngine:
         assert torch is not None and sam is not None
 
         device = self._device()
+        h, w = rgb_u8.shape[:2]
 
         # Ultralytics API varies slightly across versions; support both call styles.
         try:
@@ -181,6 +183,18 @@ class FastSAMPromptEngine:
 
         if masks_np.ndim != 3:
             return [], []
+
+        # Some Ultralytics/FastSAM variants return masks in the model canvas size
+        # instead of the original image size. Force them back to the caller image size.
+        if masks_np.shape[1] != h or masks_np.shape[2] != w:
+            resized = np.empty((masks_np.shape[0], h, w), dtype=np.float32)
+            for i in range(masks_np.shape[0]):
+                resized[i] = cv2.resize(
+                    masks_np[i].astype(np.float32),
+                    (w, h),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+            masks_np = resized
 
         # Confidence, if available
         confs: List[float] = []
