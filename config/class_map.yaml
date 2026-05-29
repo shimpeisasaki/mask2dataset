@@ -11,7 +11,7 @@
 # - 1クラスに複数プロンプトを設定できます。
 
 ignore_id: 255
-unmapped: 1     # 0..5 (send everything else to this class) or 255(ignore)
+unmapped: 255   # 0..5 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
@@ -25,38 +25,18 @@ classes:
       - woman
       - child
   1:
-    name: no_go
+    name: black_paved_road
     prompts:
-      # areas the robot should NOT drive on
       - road
       - street
       - asphalt road
       - vehicle road
       - parking lot
       - driveway
-      - grass
-      - lawn
-      - dirt
-      - mud
-      - sand
-      - puddle
-      - water
-      - wet floor
-      - stairs
-      - staircase
-      - step
-
-      # fixed structures / anchored objects
-      - wall
-      - door
-      - fence
-      - railing
-      - curb
-      - pole
-      - column
-      - tree
-      - plant
-      - rock
+      - black road
+      - black asphalt
+      - black paved road
+      - paved road
   2:
     name: traversable
     prompts:
@@ -87,9 +67,6 @@ classes:
   5:
     name: entrance
     prompts:
-      # Places you may want to move toward to regain GNSS:
-      # - main building entrance (not emergency/fire doors)
-      # - outdoor open spaces such as plazas/courtyards
       - main entrance
       - front entrance
       - building entrance
@@ -99,10 +76,4 @@ classes:
       - automatic sliding door
       - glass entrance
       - entrance gate
-      - plaza
-      - outdoor plaza
-      - courtyard
-      - outdoor square
-      - open area
-      - open outdoor space
 
