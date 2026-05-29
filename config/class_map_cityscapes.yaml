@@ -1,0 +1,54 @@
+# Cityscapes -> dataset mapping template
+# Map Cityscapes labels to this project's compact dataset classes:
+# dataset ids: 0=person, 1=avoid, 2=path, 3=sky, 4=unlabeled
+#
+# Edit `ade20k` keys below to use Cityscapes label names (this file uses
+# Cityscapes canonical English names). Restart the GUI to reload mappings.
+
+ignore_id: 255
+unmapped: 4
+
+classes:
+  0:
+    name: person
+    cityscapes:
+      - person
+      - rider
+  1:
+    name: avoid
+    cityscapes:
+      - building
+      - wall
+      - fence
+      - pole
+      - vegetation
+      - terrain
+      - traffic light
+      - traffic sign
+      - car
+      - truck
+      - bus
+      - train
+      - motorcycle
+      - bicycle
+  2:
+    name: path
+    cityscapes:
+      - road
+      - sidewalk
+      - parking
+  3:
+    name: sky
+    cityscapes:
+      - sky
+  4:
+    name: unlabeled
+    cityscapes: []
+
+# Notes:
+# - This is a template: the code that loads mappings looks for keys named
+#   "ade20k" by default. To use this file, either adapt the loader or
+#   copy entries under "cityscapes" to "ade20k" keys, or modify
+#   src/segmentation/class_map.py to accept Cityscapes keys.
+# - Cityscapes has its own label set; ensure any label names exactly match
+#   your Cityscapes installation (case-sensitive).
