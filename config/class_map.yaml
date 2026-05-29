@@ -17,11 +17,8 @@ classes:
   1:
     name: avoid
     ade20k:
-      - parking lot
-      - driveway
       - building
       - house
-      - skyscraper
       - grass
       - earth
       - field
@@ -31,28 +28,19 @@ classes:
       - rock
       - wall
       - stairs
-      - stairway
       - step
       - fence
-      - railing
-      - column
       - pole
       - door
-      - screen door
       - tree
       - plant
   2:
     name: path
     ade20k:
       - road
-      - street
       - sidewalk
       - path
       - floor
-      - tile floor
-      - concrete floor
-      - parking lot
-      - driveway
   3:
     name: sky
     ade20k:
