@@ -62,7 +62,13 @@ class DeepLabCityscapesEngine:
 
             # Try to load a user-provided weights file first
             repo_root = Path(__file__).resolve().parents[2]
-            weights_path = repo_root / "models" / "deeplab_cityscapes_mobilenetv2.pth"
+            models_dir = repo_root / "models"
+            models_dir.mkdir(parents=True, exist_ok=True)
+            weights_path = models_dir / "deeplab_cityscapes_mobilenetv2.pth"
+
+            # If weights file missing, attempt automatic download from config or env
+            if not weights_path.exists():
+                self._maybe_download_weights(weights_path)
             # The model architecture: use torchvision's DeepLabV3 with mobilenet_v3 backbone if available
             try:
                 model = seg.deeplabv3_mobilenet_v3_large(pretrained=False, progress=True)
@@ -111,3 +117,47 @@ class DeepLabCityscapesEngine:
             probs = cv2.resize(probs.astype('int32'), (w, h), interpolation=cv2.INTER_NEAREST).astype(np.int32)
 
         return probs
+
+    def _maybe_download_weights(self, target_path: Path) -> None:
+        """Attempt to download weights to `target_path`.
+
+        Sources checked (in order):
+        - environment variable `DEEPLAB_WEIGHTS_URL`
+        - config/deeplab_weights.yaml -> key `deeplab_cityscapes_mobilenetv2_url`
+
+        If no URL found, do nothing.
+        """
+        import urllib.request
+        import yaml
+
+        # 1) env var
+        url = os.environ.get("DEEPLAB_WEIGHTS_URL")
+
+        # 2) config file
+        if not url:
+            repo_root = Path(__file__).resolve().parents[2]
+            cfg = repo_root / "config" / "deeplab_weights.yaml"
+            if cfg.exists():
+                try:
+                    raw = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+                    url = raw.get("deeplab_cityscapes_mobilenetv2_url")
+                except Exception:
+                    url = None
+
+        if not url:
+            return
+
+        try:
+            print(f"Downloading DeepLab weights from {url} -> {target_path}")
+
+            def _report(block_num, block_size, total_size):
+                if total_size <= 0:
+                    return
+                downloaded = block_num * block_size
+                pct = min(100, downloaded * 100 / total_size)
+                print(f"downloaded {pct:.1f}%\r", end="")
+
+            urllib.request.urlretrieve(url, filename=str(target_path), reporthook=_report)
+            print("\nDownload complete")
+        except Exception as e:
+            print(f"failed to download weights: {e}")

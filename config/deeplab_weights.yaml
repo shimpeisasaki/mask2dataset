@@ -1,0 +1,5 @@
+# Optional: URL to download DeepLab Cityscapes MobileNetV2 weights
+# Set this to a public URL hosting the .pth file. If empty, set the
+# environment variable DEEPLAB_WEIGHTS_URL instead when running.
+
+deeplab_cityscapes_mobilenetv2_url: ""
