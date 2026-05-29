@@ -11,24 +11,14 @@ unmapped: 4     # 0..4 (send everything else to a class) or 255(ignore)
 
 classes:
   0:
-    name: sky
+    name: person
     ade20k:
-      - sky
+      - person
   1:
-    name: path
-    ade20k:
-      - road
-      - street
-      - sidewalk
-      - path
-      - floor
-      - tile floor
-      - concrete floor
-      - parking lot
-      - driveway
-  2:
     name: avoid
     ade20k:
+      - parking lot
+      - driveway
       - building
       - house
       - skyscraper
@@ -49,14 +39,24 @@ classes:
       - pole
       - door
       - screen door
-      - canopy
-      - awning
       - tree
       - plant
-  3:
-    name: person
+  2:
+    name: path
     ade20k:
-      - person
+      - road
+      - street
+      - sidewalk
+      - path
+      - floor
+      - tile floor
+      - concrete floor
+      - parking lot
+      - driveway
+  3:
+    name: sky
+    ade20k:
+      - sky
   4:
     name: unlabeled
     ade20k: []
