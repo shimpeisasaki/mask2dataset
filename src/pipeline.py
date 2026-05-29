@@ -13,6 +13,7 @@ from PIL import Image
 from src.dataset.writer import MMSegDatasetWriter
 from src.segmentation.class_map import ClassMap
 from src.segmentation.mask2former import Mask2FormerADEEngine
+from src.segmentation.deeplab_cityscapes import DeepLabCityscapesEngine
 from src.segmentation.palette import default_palette_8
 from src.utils.logging import Logger
 from src.v360 import V360Projector, ViewSpec
@@ -115,8 +116,15 @@ class GeneratorPipeline:
     def __init__(self, *, ffmpeg: str = "ffmpeg", logger: Optional[Logger] = None) -> None:
         self.logger = logger or Logger()
         self.projector = V360Projector(ffmpeg=ffmpeg)
-        self.engine = Mask2FormerADEEngine()
-        self.class_map_path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
+        # Choose engine: if a Cityscapes class_map exists, use DeepLab Cityscapes engine and mapping.
+        repo_root = Path(__file__).resolve().parent.parent
+        cs_map = repo_root / "config" / "class_map_cityscapes.yaml"
+        if cs_map.exists():
+            self.engine = DeepLabCityscapesEngine()
+            self.class_map_path = cs_map
+        else:
+            self.engine = Mask2FormerADEEngine()
+            self.class_map_path = repo_root / "config" / "class_map.yaml"
         self._class_map: Optional[ClassMap] = None
 
     def _load_class_map(self) -> ClassMap:
@@ -146,15 +154,8 @@ class GeneratorPipeline:
         pano_bgr = resize_equirect_for_speed(input_bgr, cfg.out_size)
         pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
 
-        ade = self.engine.predict_ade_ids(pano_rgb)
-
-        # Map to dataset ids (uint8)
-        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-        out = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-        for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-            if ade_id < 0:
-                continue
-            out[ade == int(ade_id)] = np.uint8(int(dataset_id))
+        # If the engine supports per-tile Cityscapes inference, use tile-first flow.
+        tile_first = hasattr(self.engine, "predict_city_ids")
 
         up_specs, mid_specs, down_specs = build_view_specs(cfg)
 
@@ -170,19 +171,37 @@ class GeneratorPipeline:
                     return [], []
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in specs]
-                lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in specs]
-
                 self.projector.project_many_rgb(pano_path, specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
-                self.projector.project_many_label_nearest(label_path, specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
 
                 rgbs: List[np.ndarray] = []
                 segs: List[np.ndarray] = []
-                for rgb_p, lbl_p in zip(rgb_outs, lbl_outs):
-                    rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
-                    lbl = np.array(Image.open(lbl_p).convert("L"), dtype=np.uint8)
-                    rgbs.append(rgb)
-                    segs.append(overlay_segmentation(rgb, lbl))
-                return rgbs, segs
+
+                if tile_first:
+                    # Run per-tile inference and map to dataset ids
+                    for rgb_p in rgb_outs:
+                        rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
+                        # engine returns model-specific ids
+                        model_ids = self.engine.predict_city_ids(rgb)
+                        # Map model ids to dataset ids via ClassMap
+                        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                        out_lbl = np.full(model_ids.shape, int(unmapped), dtype=np.uint8)
+                        for model_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                            if model_id < 0:
+                                continue
+                            out_lbl[model_ids == int(model_id)] = np.uint8(int(dataset_id))
+                        rgbs.append(rgb)
+                        segs.append(overlay_segmentation(rgb, out_lbl))
+                    return rgbs, segs
+                else:
+                    lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in specs]
+                    self.projector.project_many_label_nearest(label_path, specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
+
+                    for rgb_p, lbl_p in zip(rgb_outs, lbl_outs):
+                        rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
+                        lbl = np.array(Image.open(lbl_p).convert("L"), dtype=np.uint8)
+                        rgbs.append(rgb)
+                        segs.append(overlay_segmentation(rgb, lbl))
+                    return rgbs, segs
 
             up_rgb, up_seg = project_group(up_specs)
             mid_rgb, mid_seg = project_group(mid_specs)
@@ -225,14 +244,17 @@ class GeneratorPipeline:
 
             pano_bgr = resize_equirect_for_speed(bgr, cfg.out_size)
             pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
-            ade = self.engine.predict_ade_ids(pano_rgb)
+            tile_first = hasattr(self.engine, "predict_city_ids")
 
-            unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-            pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-            for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                if ade_id < 0:
-                    continue
-                pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
+            if not tile_first:
+                ade = self.engine.predict_ade_ids(pano_rgb)
+
+                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
+                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                    if ade_id < 0:
+                        continue
+                    pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
 
             base = path.stem
 
@@ -247,14 +269,23 @@ class GeneratorPipeline:
                 Image.fromarray(pano_label, mode="L").save(label_path)
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in all_specs]
-                lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in all_specs]
-
                 self.projector.project_many_rgb(pano_path, all_specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
-                self.projector.project_many_label_nearest(label_path, all_specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
 
-                for spec, rgb_out, lbl_out in zip(all_specs, rgb_outs, lbl_outs):
+                for spec, rgb_out in zip(all_specs, rgb_outs):
                     rgb = np.array(Image.open(rgb_out).convert("RGB"), dtype=np.uint8)
-                    lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)
+
+                    if tile_first:
+                        model_ids = self.engine.predict_city_ids(rgb)
+                        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                        lbl = np.full(model_ids.shape, int(unmapped), dtype=np.uint8)
+                        for model_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                            if model_id < 0:
+                                continue
+                            lbl[model_ids == int(model_id)] = np.uint8(int(dataset_id))
+                    else:
+                        # fallback: load projected pano labels
+                        lbl_out = td_path / f"{spec.name}_lbl.png"
+                        lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)
 
                     # Enforce allowed ids
                     bad = (lbl != 255) & (lbl > 7)
@@ -317,14 +348,17 @@ class GeneratorPipeline:
 
             pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
             pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
-            ade = self.engine.predict_ade_ids(pano_rgb)
+            tile_first = hasattr(self.engine, "predict_city_ids")
 
-            unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-            pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-            for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                if ade_id < 0:
-                    continue
-                pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
+            if not tile_first:
+                ade = self.engine.predict_ade_ids(pano_rgb)
+
+                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
+                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                    if ade_id < 0:
+                        continue
+                    pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
 
             with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
                 td_path = Path(td)
@@ -334,14 +368,23 @@ class GeneratorPipeline:
                 Image.fromarray(pano_label, mode="L").save(label_path)
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in all_specs]
-                lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in all_specs]
-
                 self.projector.project_many_rgb(pano_path, all_specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
-                self.projector.project_many_label_nearest(label_path, all_specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
 
-                for spec, rgb_out, lbl_out in zip(all_specs, rgb_outs, lbl_outs):
+                for spec, rgb_out in zip(all_specs, rgb_outs):
                     rgb = np.array(Image.open(rgb_out).convert("RGB"), dtype=np.uint8)
-                    lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)
+
+                    if tile_first:
+                        model_ids = self.engine.predict_city_ids(rgb)
+                        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+                        lbl = np.full(model_ids.shape, int(unmapped), dtype=np.uint8)
+                        for model_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                            if model_id < 0:
+                                continue
+                            lbl[model_ids == int(model_id)] = np.uint8(int(dataset_id))
+                    else:
+                        lbl_out = td_path / f"{spec.name}_lbl.png"
+                        lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)
+
                     bad = (lbl != 255) & (lbl > 7)
                     if np.any(bad):
                         lbl[bad] = 255

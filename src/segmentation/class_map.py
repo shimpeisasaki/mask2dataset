@@ -56,15 +56,16 @@ class ClassMap:
             name = str(spec.get("name", f"class{dataset_id}"))
             id_to_name[dataset_id] = name
 
-            ade_list = spec.get("ade20k", [])
+            # Support either ADE20K or Cityscapes style lists. Accept 'ade20k' or 'cityscapes'.
+            ade_list = spec.get("ade20k") if spec.get("ade20k") is not None else spec.get("cityscapes", [])
             if not isinstance(ade_list, list):
-                raise ValueError(f"classes[{dataset_id}].ade20k must be a list")
+                raise ValueError(f"classes[{dataset_id}] mapping must be a list (ade20k or cityscapes key)")
 
             for ade_name in ade_list:
                 key = cls._normalize_label_name(str(ade_name))
                 ade_id = ade_name_to_id.get(key)
                 if ade_id is None:
-                    raise ValueError(f"unknown ADE20K label name in yaml: '{ade_name}'")
+                    raise ValueError(f"unknown ADE20K/Cityscapes label name in yaml: '{ade_name}'")
                 ade_id_to_dataset_id[ade_id] = dataset_id
 
         unmapped = int(raw.get("unmapped", 255))
