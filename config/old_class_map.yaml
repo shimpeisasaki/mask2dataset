@@ -1,0 +1,79 @@
+# FastSAM prompt -> 0..5 (uint8) + ignore(255)
+#
+# IMPORTANT:
+# - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
+# - ピクセル値そのものがクラスIDです (0..5, 255=ignore)
+#
+# You can edit this file while the GUI is running; restart to reload.
+
+# Prompt mapping:
+# - `prompts:` は自由なテキストです（ADE20Kのラベル名と一致する必要はありません）。
+# - 1クラスに複数プロンプトを設定できます。
+
+ignore_id: 255
+unmapped: 255   # 0..5 (send everything else to this class) or 255(ignore)
+
+classes:
+  0:
+    name: person
+    prompts:
+      - person
+      - human
+      - pedestrian
+      - people
+      - man
+      - woman
+      - child
+  1:
+    name: black_paved_road
+    prompts:
+      - road
+      - street
+      - asphalt road
+      - vehicle road
+      - parking lot
+      - driveway
+      - black road
+      - black asphalt
+      - black paved road
+      - paved road
+  2:
+    name: traversable
+    prompts:
+      - sidewalk
+      - pavement
+      - walkway
+      - path
+      - campus path
+      - floor
+      - tile floor
+      - concrete floor
+      - ramp
+      - slope
+  3:
+    name: sky
+    prompts:
+      - sky
+      - blue sky
+      - cloudy sky
+      - outdoor sky
+  4:
+    name: ceiling
+    prompts:
+      - ceiling
+      - indoor ceiling
+      - ceiling panel
+      - roof ceiling
+  5:
+    name: entrance
+    prompts:
+      - main entrance
+      - front entrance
+      - building entrance
+      - entrance
+      - lobby entrance
+      - automatic door
+      - automatic sliding door
+      - glass entrance
+      - entrance gate
+
