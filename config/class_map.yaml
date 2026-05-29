@@ -1,8 +1,8 @@
-# FastSAM prompt -> 0..6 (uint8) + ignore(255)
+# FastSAM prompt -> 0..5 (uint8) + ignore(255)
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
-# - ピクセル値そのものがクラスIDです (0..6, 255=ignore)
+# - ピクセル値そのものがクラスIDです (0..5, 255=ignore)
 #
 # You can edit this file while the GUI is running; restart to reload.
 
@@ -11,7 +11,7 @@
 # - 1クラスに複数プロンプトを設定できます。
 
 ignore_id: 255
-unmapped: 6     # 0..6 (send everything else to this class) or 255(ignore)
+unmapped: 4     # 0..5 (send everything else to this class) or 255(ignore)
 
 classes:
   0:
@@ -70,6 +70,18 @@ classes:
       - stairs
       - staircase
       - step
+
+      # fixed structures / anchored objects
+      - wall
+      - door
+      - fence
+      - railing
+      - curb
+      - pole
+      - column
+      - tree
+      - plant
+      - rock
   5:
     name: 人
     prompts:
@@ -80,189 +92,4 @@ classes:
       - man
       - woman
       - child
-  6:
-    name: 障害物
-    prompts:
-      # physical obstacles / unknown obstacles
-      - obstacle
-      - wall
-      - fence
-      - railing
-      - pole
-      - column
-      - door
-      - tree
-      - plant
-      - rock
-      - bench
-      - chair
-      - table
-      - sign
-      - signboard
-      - traffic light
-      - street light
-      - trash can
-      - bicycle
-      - car
-      - truck
-      - bus
-      - van
 
-# -----------------------------------------------------------------------------
-# Prompt word reference list (former ADE20K labels)
-#
-# NOTE:
-# - ここは参照用のコメントです。必要に応じて上の `classes:` を編集してください。
-#
-#  ID : English (日本語訳)
-# -----------------------------------------------------------------------------
-# 0: wall（壁）
-# 1: building（建物）
-# 2: sky（空）
-# 3: floor（床）
-# 4: tree（木）
-# 5: ceiling（天井）
-# 6: road（道路）
-# 7: bed（ベッド）
-# 8: windowpane（窓ガラス）
-# 9: grass（芝生）
-# 10: cabinet（キャビネット・収納）
-# 11: sidewalk（歩道）
-# 12: person（人）
-# 13: earth（土・地面）
-# 14: door（ドア・扉）
-# 15: table（テーブル）
-# 16: mountain（山）
-# 17: plant（植物）
-# 18: curtain（カーテン）
-# 19: chair（椅子）
-# 20: car（自動車）
-# 21: water（水）
-# 22: painting（絵画）
-# 23: sofa（ソファ）
-# 24: shelf（棚）
-# 25: house（家屋）
-# 26: sea（海）
-# 27: mirror（鏡）
-# 28: rug（ラグ・敷物）
-# 29: field（野原・畑）
-# 30: armchair（肘掛け椅子）
-# 31: seat（座席）
-# 32: fence（フェンス・柵）
-# 33: desk（机）
-# 34: rock（岩）
-# 35: wardrobe（ワードローブ・洋服ダンス）
-# 36: lamp（ランプ・照明）
-# 37: bathtub（浴槽）
-# 38: railing（手すり）
-# 39: cushion（クッション）
-# 40: base（台座・基部）
-# 41: box（箱）
-# 42: column（柱）
-# 43: signboard（看板）
-# 44: chest of drawers（引き出し収納）
-# 45: counter（カウンター）
-# 46: sand（砂）
-# 47: sink（流し台・シンク）
-# 48: skyscraper（高層ビル）
-# 49: fireplace（暖炉）
-# 50: refrigerator（冷蔵庫）
-# 51: grandstand（観覧席・スタンド）
-# 52: path（小道・通路）
-# 53: stairs（階段）
-# 54: runway（滑走路）
-# 55: case（ケース）
-# 56: pool table（ビリヤード台）
-# 57: pillow（枕）
-# 58: screen door（網戸・スクリーンドア）
-# 59: stairway（階段（通路））
-# 60: river（川）
-# 61: bridge（橋）
-# 62: bookcase（本棚）
-# 63: blind（ブラインド）
-# 64: coffee table（ローテーブル）
-# 65: toilet（トイレ）
-# 66: flower（花）
-# 67: book（本）
-# 68: hill（丘）
-# 69: bench（ベンチ）
-# 70: countertop（天板・カウンタートップ）
-# 71: stove（コンロ・ストーブ）
-# 72: palm（ヤシ）
-# 73: kitchen island（アイランドキッチン）
-# 74: computer（コンピュータ）
-# 75: swivel chair（回転椅子）
-# 76: boat（ボート）
-# 77: bar（バー（カウンター／店））
-# 78: arcade machine（アーケード筐体）
-# 79: hovel（小屋・粗末な家）
-# 80: bus（バス）
-# 81: towel（タオル）
-# 82: light（ライト・照明）
-# 83: truck（トラック）
-# 84: tower（塔）
-# 85: chandelier（シャンデリア）
-# 86: awning（日よけ・ひさし）
-# 87: streetlight（街灯）
-# 88: booth（ブース・小屋）
-# 89: television receiver（テレビ）
-# 90: airplane（飛行機）
-# 91: dirt track（未舗装路）
-# 92: apparel（衣類）
-# 93: pole（ポール・電柱）
-# 94: land（陸地）
-# 95: bannister（手すり（階段））
-# 96: escalator（エスカレーター）
-# 97: ottoman（オットマン）
-# 98: bottle（ボトル）
-# 99: buffet（ビュッフェ台）
-# 100: poster（ポスター）
-# 101: stage（ステージ）
-# 102: van（バン）
-# 103: ship（船）
-# 104: fountain（噴水）
-# 105: conveyer belt（コンベヤベルト）
-# 106: canopy（キャノピー・天蓋）
-# 107: washer（洗濯機）
-# 108: plaything（おもちゃ）
-# 109: swimming pool（プール）
-# 110: stool（スツール）
-# 111: barrel（樽）
-# 112: basket（かご）
-# 113: waterfall（滝）
-# 114: tent（テント）
-# 115: bag（バッグ・袋）
-# 116: minibike（ミニバイク）
-# 117: cradle（ゆりかご）
-# 118: oven（オーブン）
-# 119: ball（ボール）
-# 120: food（食べ物）
-# 121: step（段差）
-# 122: tank（タンク）
-# 123: trade name（店名表示・商標名）
-# 124: microwave（電子レンジ）
-# 125: pot（鍋）
-# 126: animal（動物）
-# 127: bicycle（自転車）
-# 128: lake（湖）
-# 129: dishwasher（食器洗い機）
-# 130: screen（スクリーン）
-# 131: blanket（毛布）
-# 132: sculpture（彫刻）
-# 133: hood（フード（換気フード））
-# 134: sconce（壁付け照明）
-# 135: vase（花瓶）
-# 136: traffic light（信号機）
-# 137: tray（トレイ）
-# 138: ashcan（ゴミ箱）
-# 139: fan（扇風機）
-# 140: pier（桟橋）
-# 141: crt screen（CRT画面）
-# 142: plate（皿）
-# 143: monitor（モニター）
-# 144: bulletin board（掲示板）
-# 145: shower（シャワー）
-# 146: radiator（ラジエーター・暖房）
-# 147: glass（ガラス）
-# 148: clock（時計）
-# 149: flag（旗）
