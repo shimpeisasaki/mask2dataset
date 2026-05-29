@@ -1,13 +1,13 @@
-# ADE20K -> 0..6 (uint8) + ignore(255)
+# ADE20K -> 0..4 (uint8) + ignore(255)
 #
 # IMPORTANT:
 # - ann_dir/ に保存されるラベルPNGは「見た目がほぼ真っ黒」になります。
-# - ピクセル値そのものがクラスIDです (0..7, 255=ignore)
+# - ピクセル値そのものがクラスIDです (0..4, 255=ignore)
 #
 # You can edit this file while the GUI is running; restart to reload.
 
 ignore_id: 255
-unmapped: 6     # 0..6 (send everything else to a class) or 255(ignore)
+unmapped: 4     # 0..4 (send everything else to a class) or 255(ignore)
 
 classes:
   0:
@@ -15,29 +15,23 @@ classes:
     ade20k:
       - sky
   1:
-    name: ceiling
+    name: path
     ade20k:
-      - ceiling
-      - canopy
-      - awning
+      - road
+      - street
+      - sidewalk
+      - path
+      - floor
+      - tile floor
+      - concrete floor
+      - parking lot
+      - driveway
   2:
-    name: facade
+    name: avoid
     ade20k:
       - building
       - house
       - skyscraper
-  3:
-    name: path
-    ade20k:
-      - floor
-      - sidewalk
-      - path
-      - rug
-  4:
-    name: avoid_area
-    ade20k:
-      # environment / terrain
-      - road
       - grass
       - earth
       - field
@@ -45,10 +39,6 @@ classes:
       - mountain
       - hill
       - rock
-      - tree
-      - plant
-
-      # level changes / structures
       - wall
       - stairs
       - stairway
@@ -57,167 +47,23 @@ classes:
       - railing
       - column
       - pole
-
-      # obstacles / street furniture
       - door
       - screen door
-      - car
-      - truck
-      - bus
-      - van
-      - minibike
-      - bicycle
-      - bench
-      - chair
-      - table
-      - signboard
-      - traffic light
-      - streetlight
-      - ashcan
-      - sculpture
-  5:
+      - canopy
+      - awning
+      - tree
+      - plant
+  3:
     name: person
     ade20k:
       - person
-  6:
+  4:
     name: unlabeled
-    ade20k:
-      - windowpane
-      - curtain
-      - cushion
-      - lamp
+    ade20k: []
 
-# -----------------------------------------------------------------------------
-# ADE20K label list (Mask2Former config.id2label)
-#
-# NOTE:
-# - `ade20k:` に書く名前は、下の英名と一致する必要があります（大文字小文字は無視されます）。
-# - ここは参照用のコメントです。必要に応じて上の `classes:` を編集してください。
-#
-#  ID : English (日本語訳)
-# -----------------------------------------------------------------------------
-# 0: wall（壁）
-# 1: building（建物）
-# 2: sky（空）
-# 3: floor（床）
-# 4: tree（木）
-# 5: ceiling（天井）
-# 6: road（道路）
-# 7: bed（ベッド）
-# 8: windowpane（窓ガラス）
-# 9: grass（芝生）
-# 10: cabinet（キャビネット・収納）
-# 11: sidewalk（歩道）
-# 12: person（人）
-# 13: earth（土・地面）
-# 14: door（ドア・扉）
-# 15: table（テーブル）
-# 16: mountain（山）
-# 17: plant（植物）
-# 18: curtain（カーテン）
-# 19: chair（椅子）
-# 20: car（自動車）
-# 21: water（水）
-# 22: painting（絵画）
-# 23: sofa（ソファ）
-# 24: shelf（棚）
-# 25: house（家屋）
-# 26: sea（海）
-# 27: mirror（鏡）
-# 28: rug（ラグ・敷物）
-# 29: field（野原・畑）
-# 30: armchair（肘掛け椅子）
-# 31: seat（座席）
-# 32: fence（フェンス・柵）
-# 33: desk（机）
-# 34: rock（岩）
-# 35: wardrobe（ワードローブ・洋服ダンス）
-# 36: lamp（ランプ・照明）
-# 37: bathtub（浴槽）
-# 38: railing（手すり）
-# 39: cushion（クッション）
-# 40: base（台座・基部）
-# 41: box（箱）
-# 42: column（柱）
-# 43: signboard（看板）
-# 44: chest of drawers（引き出し収納）
-# 45: counter（カウンター）
-# 46: sand（砂）
-# 47: sink（流し台・シンク）
-# 48: skyscraper（高層ビル）
-# 49: fireplace（暖炉）
-# 50: refrigerator（冷蔵庫）
-# 51: grandstand（観覧席・スタンド）
-# 52: path（小道・通路）
-# 53: stairs（階段）
-# 54: runway（滑走路）
-# 55: case（ケース）
-# 56: pool table（ビリヤード台）
-# 57: pillow（枕）
-# 58: screen door（網戸・スクリーンドア）
-# 59: stairway（階段（通路））
-# 60: river（川）
-# 61: bridge（橋）
-# 62: bookcase（本棚）
-# 63: blind（ブラインド）
-# 64: coffee table（ローテーブル）
-# 65: toilet（トイレ）
-# 66: flower（花）
-# 67: book（本）
-# 68: hill（丘）
-# 69: bench（ベンチ）
-# 70: countertop（天板・カウンタートップ）
-# 71: stove（コンロ・ストーブ）
-# 72: palm（ヤシ）
-# 73: kitchen island（アイランドキッチン）
-# 74: computer（コンピュータ）
-# 75: swivel chair（回転椅子）
-# 76: boat（ボート）
-# 77: bar（バー（カウンター／店））
-# 78: arcade machine（アーケード筐体）
-# 79: hovel（小屋・粗末な家）
-# 80: bus（バス）
-# 81: towel（タオル）
-# 82: light（ライト・照明）
-# 83: truck（トラック）
-# 84: tower（塔）
-# 85: chandelier（シャンデリア）
-# 86: awning（日よけ・ひさし）
-# 87: streetlight（街灯）
-# 88: booth（ブース・小屋）
-# 89: television receiver（テレビ）
-# 90: airplane（飛行機）
-# 91: dirt track（未舗装路）
-# 92: apparel（衣類）
-# 93: pole（ポール・電柱）
-# 94: land（陸地）
-# 95: bannister（手すり（階段））
-# 96: escalator（エスカレーター）
-# 97: ottoman（オットマン）
-# 98: bottle（ボトル）
-# 99: buffet（ビュッフェ台）
-# 100: poster（ポスター）
-# 101: stage（ステージ）
-# 102: van（バン）
-# 103: ship（船）
-# 104: fountain（噴水）
-# 105: conveyer belt（コンベヤベルト）
-# 106: canopy（キャノピー・天蓋）
-# 107: washer（洗濯機）
-# 108: plaything（おもちゃ）
-# 109: swimming pool（プール）
-# 110: stool（スツール）
-# 111: barrel（樽）
-# 112: basket（かご）
-# 113: waterfall（滝）
-# 114: tent（テント）
-# 115: bag（バッグ・袋）
-# 116: minibike（ミニバイク）
-# 117: cradle（ゆりかご）
-# 118: oven（オーブン）
-# 119: ball（ボール）
-# 120: food（食べ物）
-# 121: step（段差）
+# Notes:
+# - ceiling and moving obstacles are intentionally left out of explicit ADE20K lists.
+# - anything unmapped falls back to `unlabeled`.
 # 122: tank（タンク）
 # 123: trade name（店名表示・商標名）
 # 124: microwave（電子レンジ）
