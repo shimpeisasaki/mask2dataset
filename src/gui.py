@@ -285,6 +285,7 @@ class AppGUI:
         ttk.Label(r0, text="FOV(正方形)").pack(side="left")
         ttk.Radiobutton(r0, text="90", variable=self.var_fov, value="90").pack(side="left", padx=6)
         ttk.Radiobutton(r0, text="120", variable=self.var_fov, value="120").pack(side="left")
+        ttk.Radiobutton(r0, text="150", variable=self.var_fov, value="150").pack(side="left", padx=6)
 
         r1 = ttk.Frame(frm_set)
         r1.pack(fill="x", padx=8, pady=4)
@@ -402,8 +403,6 @@ class AppGUI:
             ttk.Label(item, text=f"{cls_id}: {cls_name}").pack(side="left", padx=(6, 0))
 
     def _on_toggle_show_seg(self) -> None:
-        if self.var_show_seg.get() and self.preview1_rgb is not None and self.preview1_seg_rgb is None:
-            self._start_preview1_segmentation(self.preview1_rgb)
         self._refresh_preview1_overlay()
         self._refresh_preview2_images()
 
@@ -606,9 +605,9 @@ class AppGUI:
         try:
             fov = float(self.var_fov.get())
         except Exception:
-            raise ValueError("FOV must be 90 or 120")
-        if fov not in (90.0, 120.0):
-            raise ValueError("FOV must be 90 or 120")
+            raise ValueError("FOV must be 90, 120, or 150")
+        if fov not in (90.0, 120.0, 150.0):
+            raise ValueError("FOV must be 90, 120, or 150")
 
         try:
             out_size = int(self.var_out_size.get())
@@ -698,9 +697,6 @@ class AppGUI:
         self.preview1_seg_rgb = None
         self.preview_loaded_time = t
         self._refresh_preview1_overlay()
-
-        if self.var_show_seg.get():
-            self._start_preview1_segmentation(pano_rgb, req_id=req_id)
 
         if t is None:
             self.lbl_time.config(text="")

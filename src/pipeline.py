@@ -20,7 +20,7 @@ from src.v360 import V360Projector, ViewSpec
 
 @dataclass(frozen=True)
 class ExtractConfig:
-    fov: float  # 90 or 120
+    fov: float  # 90, 120, or 150
     out_size: int
     yaw_offset: float  # slider value in [-180, 180]
 
@@ -140,36 +140,39 @@ class GeneratorPipeline:
     ) -> PreviewResult:
         cm = self._ensure_class_map()
 
-        # Downscale equirect early for speed (also becomes the actual dataset basis).
-        pano_bgr = resize_equirect_for_speed(input_bgr, cfg.out_size)
-        pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
+        # Preview1 is a lightweight equirect display (with yaw marker).
+        pano_bgr_disp = resize_equirect_for_speed(input_bgr, cfg.out_size)
+        pano_rgb_disp = cv2.cvtColor(pano_bgr_disp, cv2.COLOR_BGR2RGB)
 
-        out = self.engine.predict_dataset_ids(pano_rgb, cm)
+        # For better accuracy, segment AFTER projecting each rectilinear tile.
+        pano_rgb_full = cv2.cvtColor(input_bgr, cv2.COLOR_BGR2RGB)
 
         up_specs, mid_specs, down_specs = build_view_specs(cfg)
 
         with tempfile.TemporaryDirectory(prefix="v360_preview_") as td:
             td_path = Path(td)
             pano_path = td_path / "pano.png"
-            label_path = td_path / "pano_label.png"
-            Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-            Image.fromarray(out, mode="L").save(label_path)
+            Image.fromarray(pano_rgb_full, mode="RGB").save(pano_path)
 
             def project_group(specs: Sequence[ViewSpec]) -> Tuple[List[np.ndarray], List[np.ndarray]]:
                 if not specs:
                     return [], []
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in specs]
-                lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in specs]
-
                 self.projector.project_many_rgb(pano_path, specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
-                self.projector.project_many_label_nearest(label_path, specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
 
                 rgbs: List[np.ndarray] = []
                 segs: List[np.ndarray] = []
-                for rgb_p, lbl_p in zip(rgb_outs, lbl_outs):
+                for rgb_p in rgb_outs:
                     rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
-                    lbl = np.array(Image.open(lbl_p).convert("L"), dtype=np.uint8)
+                    lbl = self.engine.predict_dataset_ids(rgb, cm)
+                    if lbl.dtype != np.uint8:
+                        lbl = lbl.astype(np.uint8, copy=False)
+
+                    # Enforce allowed ids (0..5 or 255) for this branch.
+                    bad = (lbl != 255) & (lbl > 5)
+                    if np.any(bad):
+                        lbl[bad] = 255
                     rgbs.append(rgb)
                     segs.append(overlay_segmentation(rgb, lbl))
                 return rgbs, segs
@@ -179,7 +182,7 @@ class GeneratorPipeline:
             down_rgb, down_seg = project_group(down_specs)
 
         return PreviewResult(
-            preview1_rgb=pano_rgb,
+            preview1_rgb=pano_rgb_disp,
             preview1_time_s=preview_time_s,
             up_tiles_rgb=up_rgb,
             mid_tiles_rgb=mid_rgb,
@@ -213,9 +216,7 @@ class GeneratorPipeline:
                 self.logger.log(f"skip unreadable image: {path}")
                 continue
 
-            pano_bgr = resize_equirect_for_speed(bgr, cfg.out_size)
-            pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
-            pano_label = self.engine.predict_dataset_ids(pano_rgb, cm)
+            pano_rgb_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
             base = path.stem
 
@@ -225,22 +226,20 @@ class GeneratorPipeline:
             with tempfile.TemporaryDirectory(prefix="v360_gen_") as td:
                 td_path = Path(td)
                 pano_path = td_path / "pano.png"
-                label_path = td_path / "pano_label.png"
-                Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-                Image.fromarray(pano_label, mode="L").save(label_path)
+                Image.fromarray(pano_rgb_full, mode="RGB").save(pano_path)
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in all_specs]
-                lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in all_specs]
-
                 self.projector.project_many_rgb(pano_path, all_specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
-                self.projector.project_many_label_nearest(label_path, all_specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
 
-                for spec, rgb_out, lbl_out in zip(all_specs, rgb_outs, lbl_outs):
+                for spec, rgb_out in zip(all_specs, rgb_outs):
                     rgb = np.array(Image.open(rgb_out).convert("RGB"), dtype=np.uint8)
-                    lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)
+
+                    lbl = self.engine.predict_dataset_ids(rgb, cm)
+                    if lbl.dtype != np.uint8:
+                        lbl = lbl.astype(np.uint8, copy=False)
 
                     # Enforce allowed ids
-                    bad = (lbl != 255) & (lbl > 7)
+                    bad = (lbl != 255) & (lbl > 5)
                     if np.any(bad):
                         lbl[bad] = 255
 
@@ -298,27 +297,23 @@ class GeneratorPipeline:
             # Choose split per source frame to avoid leakage across train/val.
             split = writer.choose_split(rng.random())
 
-            pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
-            pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
-            pano_label = self.engine.predict_dataset_ids(pano_rgb, cm)
+            pano_rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
                 td_path = Path(td)
                 pano_path = td_path / "pano.png"
-                label_path = td_path / "pano_label.png"
-                Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-                Image.fromarray(pano_label, mode="L").save(label_path)
+                Image.fromarray(pano_rgb_full, mode="RGB").save(pano_path)
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in all_specs]
-                lbl_outs = [td_path / f"{spec.name}_lbl.png" for spec in all_specs]
-
                 self.projector.project_many_rgb(pano_path, all_specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
-                self.projector.project_many_label_nearest(label_path, all_specs, lbl_outs, out_size=cfg.out_size, fov=cfg.fov)
 
-                for spec, rgb_out, lbl_out in zip(all_specs, rgb_outs, lbl_outs):
+                for spec, rgb_out in zip(all_specs, rgb_outs):
                     rgb = np.array(Image.open(rgb_out).convert("RGB"), dtype=np.uint8)
-                    lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)
-                    bad = (lbl != 255) & (lbl > 7)
+
+                    lbl = self.engine.predict_dataset_ids(rgb, cm)
+                    if lbl.dtype != np.uint8:
+                        lbl = lbl.astype(np.uint8, copy=False)
+                    bad = (lbl != 255) & (lbl > 5)
                     if np.any(bad):
                         lbl[bad] = 255
 
