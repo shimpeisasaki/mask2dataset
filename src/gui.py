@@ -284,7 +284,8 @@ class AppGUI:
         r0.pack(fill="x", padx=8, pady=4)
         ttk.Label(r0, text="FOV(正方形)").pack(side="left")
         ttk.Radiobutton(r0, text="90", variable=self.var_fov, value="90").pack(side="left", padx=6)
-        ttk.Radiobutton(r0, text="120", variable=self.var_fov, value="120").pack(side="left")
+        ttk.Radiobutton(r0, text="120", variable=self.var_fov, value="120").pack(side="left", padx=(0, 6))
+        ttk.Radiobutton(r0, text="150", variable=self.var_fov, value="150").pack(side="left")
 
         r1 = ttk.Frame(frm_set)
         r1.pack(fill="x", padx=8, pady=4)
@@ -615,9 +616,9 @@ class AppGUI:
         try:
             fov = float(self.var_fov.get())
         except Exception:
-            raise ValueError("FOV must be 90 or 120")
-        if fov not in (90.0, 120.0):
-            raise ValueError("FOV must be 90 or 120")
+            raise ValueError("FOV must be 90, 120, or 150")
+        if fov not in (90.0, 120.0, 150.0):
+            raise ValueError("FOV must be 90, 120, or 150")
 
         try:
             out_size = int(self.var_out_size.get())
@@ -792,13 +793,19 @@ class AppGUI:
 
         def worker() -> None:
             try:
-                result = self.pipeline.build_preview(input_bgr=bgr, preview_time_s=t, cfg=cfg)
+                result = self.pipeline.build_preview(
+                    input_bgr=bgr,
+                    preview_time_s=t,
+                    cfg=cfg,
+                    reload_class_map=True,
+                )
             except Exception as e:
                 self.logger.log(f"preview2 failed: {e}")
                 return
 
             def apply() -> None:
                 self._clear_preview2()
+                self._build_legend()
                 self.tiles_up = self._set_tiles(self.frm_row_up, result.up_tiles_rgb, result.up_tiles_seg, max_cols=7)
                 self.tiles_mid = self._set_tiles(self.frm_row_mid, result.mid_tiles_rgb, result.mid_tiles_seg, max_cols=6)
                 self.tiles_down = self._set_tiles(self.frm_row_down, result.down_tiles_rgb, result.down_tiles_seg, max_cols=6)

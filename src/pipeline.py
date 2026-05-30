@@ -20,7 +20,7 @@ from src.v360 import V360Projector, ViewSpec
 
 @dataclass(frozen=True)
 class ExtractConfig:
-    fov: float  # 90 or 120
+    fov: float  # 90, 120, or 150
     out_size: int
     yaw_offset: float  # slider value in [-180, 180]
 
@@ -130,8 +130,14 @@ class GeneratorPipeline:
         self.logger.log(f"Loaded class_map: {cm.summarize()}")
         return cm
 
-    def _ensure_class_map(self) -> ClassMap:
-        return self._class_map or self._load_class_map()
+    def reload_class_map(self) -> ClassMap:
+        self._class_map = None
+        return self._load_class_map()
+
+    def _ensure_class_map(self, *, force_reload: bool = False) -> ClassMap:
+        if force_reload or self._class_map is None:
+            return self._load_class_map()
+        return self._class_map
 
     def build_preview(
         self,
@@ -139,8 +145,9 @@ class GeneratorPipeline:
         input_bgr: np.ndarray,
         preview_time_s: Optional[float],
         cfg: ExtractConfig,
+        reload_class_map: bool = False,
     ) -> PreviewResult:
-        cm = self._ensure_class_map()
+        cm = self._ensure_class_map(force_reload=reload_class_map)
 
         # Downscale equirect early for speed (also becomes the actual dataset basis).
         pano_bgr = resize_equirect_for_speed(input_bgr, cfg.out_size)
