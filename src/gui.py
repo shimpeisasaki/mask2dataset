@@ -17,7 +17,14 @@ import yaml
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from src.pipeline import ExtractConfig, GeneratorPipeline, PreviewResult, overlay_segmentation, resize_equirect_for_speed
+from src.pipeline import (
+    ExtractConfig,
+    GeneratorPipeline,
+    PreviewResult,
+    overlay_segmentation,
+    remap_model_ids_to_dataset_ids,
+    resize_equirect_for_speed,
+)
 from src.segmentation.palette import default_palette_8
 from src.utils.logging import Logger
 
@@ -79,7 +86,7 @@ class Tile:
 class AppGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("360 Dataset Generator (Mask2Former ADE20K)")
+        self.root.title("360 Dataset Generator (DeepLabV3 Cityscapes)")
 
         self.var_input_type = tk.StringVar(value="video")  # video | images
 
@@ -110,7 +117,6 @@ class AppGUI:
 
         self.preview1_photo: Optional[ImageTk.PhotoImage] = None
         self.preview1_rgb: Optional[np.ndarray] = None
-        self.preview1_seg_rgb: Optional[np.ndarray] = None
         self.preview_loaded_time: Optional[float] = None
 
         self._preview1_req_id: int = 0
@@ -285,6 +291,7 @@ class AppGUI:
         ttk.Label(r0, text="FOV(正方形)").pack(side="left")
         ttk.Radiobutton(r0, text="90", variable=self.var_fov, value="90").pack(side="left", padx=6)
         ttk.Radiobutton(r0, text="120", variable=self.var_fov, value="120").pack(side="left")
+        ttk.Radiobutton(r0, text="150", variable=self.var_fov, value="150").pack(side="left", padx=(6, 0))
 
         r1 = ttk.Frame(frm_set)
         r1.pack(fill="x", padx=8, pady=4)
@@ -341,29 +348,10 @@ class AppGUI:
         self.txt_log = tk.Text(frm_log, height=10, state="disabled")
         self.txt_log.pack(fill="both", expand=True, padx=8, pady=6)
 
-    def _read_class_names_from_yaml(self) -> Dict[int, str]:
-        """Return {dataset_id: name} from config/class_map.yaml (no model load)."""
-        path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
-        try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except Exception:
-            raw = None
-
-        out: Dict[int, str] = {}
-        if isinstance(raw, dict):
-            classes = raw.get("classes")
-            if isinstance(classes, dict):
-                for k, spec in classes.items():
-                    try:
-                        did = int(k)
-                    except Exception:
-                        continue
-                    if not (0 <= did <= 7):
-                        continue
-                    if not isinstance(spec, dict):
-                        continue
-                    out[did] = str(spec.get("name", f"class{did}"))
-        return dict(sorted(out.items(), key=lambda kv: kv[0]))
+    def _read_class_names_from_class_map(self) -> Dict[int, str]:
+        """Return {dataset_id: name} from the active ClassMap."""
+        cm = self.pipeline._ensure_class_map()
+        return dict(sorted(cm.id_to_name.items(), key=lambda kv: kv[0]))
 
     def _build_legend(self) -> None:
         """Populate legend frame with class name + color swatch."""
@@ -375,7 +363,7 @@ class AppGUI:
             child.destroy()
 
         palette = default_palette_8()
-        names = self._read_class_names_from_yaml()
+        names = self._read_class_names_from_class_map()
 
         grid = ttk.Frame(frm)
         grid.pack(fill="x", padx=8, pady=6)
@@ -402,45 +390,7 @@ class AppGUI:
             ttk.Label(item, text=f"{cls_id}: {cls_name}").pack(side="left", padx=(6, 0))
 
     def _on_toggle_show_seg(self) -> None:
-        if self.var_show_seg.get() and self.preview1_rgb is not None and self.preview1_seg_rgb is None:
-            self._start_preview1_segmentation(self.preview1_rgb)
-        self._refresh_preview1_overlay()
         self._refresh_preview2_images()
-
-    def _start_preview1_segmentation(self, pano_rgb: np.ndarray, *, req_id: Optional[int] = None) -> None:
-        if req_id is None:
-            self._preview1_req_id += 1
-            req_id = self._preview1_req_id
-
-        self._append_log("[info] preview1: segmenting...")
-
-        def worker() -> None:
-            try:
-                self.pipeline.engine.ensure_loaded()
-                cm = self.pipeline._ensure_class_map()  # cache if already loaded
-
-                ade = self.pipeline.engine.predict_ade_ids(pano_rgb)
-                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                    if ade_id < 0:
-                        continue
-                    lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
-
-                seg_rgb = overlay_segmentation(pano_rgb, lbl)
-            except Exception as e:
-                self.logger.log(f"preview1 segmentation failed: {e}")
-                return
-
-            def apply() -> None:
-                if req_id != self._preview1_req_id:
-                    return
-                self.preview1_seg_rgb = seg_rgb
-                self._refresh_preview1_overlay()
-
-            self.root.after(0, apply)
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def _append_log(self, line: str) -> None:
         def _do() -> None:
@@ -615,9 +565,9 @@ class AppGUI:
         try:
             fov = float(self.var_fov.get())
         except Exception:
-            raise ValueError("FOV must be 90 or 120")
-        if fov not in (90.0, 120.0):
-            raise ValueError("FOV must be 90 or 120")
+            raise ValueError("FOV must be 90, 120, or 150")
+        if fov not in (90.0, 120.0, 150.0):
+            raise ValueError("FOV must be 90, 120, or 150")
 
         try:
             out_size = int(self.var_out_size.get())
@@ -704,12 +654,8 @@ class AppGUI:
         pano_bgr = resize_equirect_for_speed(bgr, cfg.out_size)
         pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
         self.preview1_rgb = pano_rgb
-        self.preview1_seg_rgb = None
         self.preview_loaded_time = t
         self._refresh_preview1_overlay()
-
-        if self.var_show_seg.get():
-            self._start_preview1_segmentation(pano_rgb, req_id=req_id)
 
         if t is None:
             self.lbl_time.config(text="")
@@ -720,7 +666,7 @@ class AppGUI:
         if self.preview1_rgb is None:
             return
 
-        rgb = self.preview1_seg_rgb if (self.var_show_seg.get() and self.preview1_seg_rgb is not None) else self.preview1_rgb
+        rgb = self.preview1_rgb
         h, w = rgb.shape[:2]
         yaw0 = float(self.var_yaw_offset.get())
         yaw_disp = (yaw0 + 180.0) % 360.0

@@ -12,7 +12,6 @@ from PIL import Image
 
 from src.dataset.writer import MMSegDatasetWriter
 from src.segmentation.class_map import ClassMap
-from src.segmentation.mask2former import Mask2FormerADEEngine
 from src.segmentation.deeplab_cityscapes import DeepLabCityscapesEngine
 from src.segmentation.palette import default_palette_8
 from src.utils.logging import Logger
@@ -21,7 +20,7 @@ from src.v360 import V360Projector, ViewSpec
 
 @dataclass(frozen=True)
 class ExtractConfig:
-    fov: float  # 90 or 120
+    fov: float  # 90, 120, or 150
     out_size: int
     yaw_offset: float  # slider value in [-180, 180]
 
@@ -100,6 +99,16 @@ def overlay_segmentation(rgb: np.ndarray, label: np.ndarray, alpha: float = 0.45
     return out
 
 
+def remap_model_ids_to_dataset_ids(model_ids: np.ndarray, cm: ClassMap) -> np.ndarray:
+    unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
+    out_lbl = np.full(model_ids.shape, int(unmapped), dtype=np.uint8)
+    for model_id, dataset_id in cm.ade_id_to_dataset_id.items():
+        if model_id < 0:
+            continue
+        out_lbl[model_ids == int(model_id)] = np.uint8(int(dataset_id))
+    return out_lbl
+
+
 @dataclass
 class PreviewResult:
     preview1_rgb: np.ndarray
@@ -116,15 +125,10 @@ class GeneratorPipeline:
     def __init__(self, *, ffmpeg: str = "ffmpeg", logger: Optional[Logger] = None) -> None:
         self.logger = logger or Logger()
         self.projector = V360Projector(ffmpeg=ffmpeg)
-        # Choose engine: if a Cityscapes class_map exists, use DeepLab Cityscapes engine and mapping.
+        # Use DeepLabCityscapesEngine with Cityscapes class mapping
         repo_root = Path(__file__).resolve().parent.parent
-        cs_map = repo_root / "config" / "class_map_cityscapes.yaml"
-        if cs_map.exists():
-            self.engine = DeepLabCityscapesEngine()
-            self.class_map_path = cs_map
-        else:
-            self.engine = Mask2FormerADEEngine()
-            self.class_map_path = repo_root / "config" / "class_map.yaml"
+        self.engine = DeepLabCityscapesEngine()
+        self.class_map_path = repo_root / "config" / "class_map_cityscapes.yaml"
         self._class_map: Optional[ClassMap] = None
 
     def _load_class_map(self) -> ClassMap:
@@ -162,9 +166,13 @@ class GeneratorPipeline:
         with tempfile.TemporaryDirectory(prefix="v360_preview_") as td:
             td_path = Path(td)
             pano_path = td_path / "pano.png"
-            label_path = td_path / "pano_label.png"
             Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-            Image.fromarray(out, mode="L").save(label_path)
+
+            if not tile_first:
+                model_ids = self.engine.predict_city_ids(pano_rgb)
+                pano_label = remap_model_ids_to_dataset_ids(model_ids, cm)
+                label_path = td_path / "pano_label.png"
+                Image.fromarray(pano_label, mode="L").save(label_path)
 
             def project_group(specs: Sequence[ViewSpec]) -> Tuple[List[np.ndarray], List[np.ndarray]]:
                 if not specs:
@@ -247,14 +255,8 @@ class GeneratorPipeline:
             tile_first = hasattr(self.engine, "predict_city_ids")
 
             if not tile_first:
-                ade = self.engine.predict_ade_ids(pano_rgb)
-
-                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                    if ade_id < 0:
-                        continue
-                    pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
+                model_ids = self.engine.predict_city_ids(pano_rgb)
+                pano_label = remap_model_ids_to_dataset_ids(model_ids, cm)
 
             base = path.stem
 
@@ -264,9 +266,11 @@ class GeneratorPipeline:
             with tempfile.TemporaryDirectory(prefix="v360_gen_") as td:
                 td_path = Path(td)
                 pano_path = td_path / "pano.png"
-                label_path = td_path / "pano_label.png"
                 Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-                Image.fromarray(pano_label, mode="L").save(label_path)
+
+                if not tile_first:
+                    label_path = td_path / "pano_label.png"
+                    Image.fromarray(pano_label, mode="L").save(label_path)
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in all_specs]
                 self.projector.project_many_rgb(pano_path, all_specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
@@ -276,12 +280,7 @@ class GeneratorPipeline:
 
                     if tile_first:
                         model_ids = self.engine.predict_city_ids(rgb)
-                        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                        lbl = np.full(model_ids.shape, int(unmapped), dtype=np.uint8)
-                        for model_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                            if model_id < 0:
-                                continue
-                            lbl[model_ids == int(model_id)] = np.uint8(int(dataset_id))
+                        lbl = remap_model_ids_to_dataset_ids(model_ids, cm)
                     else:
                         # fallback: load projected pano labels
                         lbl_out = td_path / f"{spec.name}_lbl.png"
@@ -351,21 +350,17 @@ class GeneratorPipeline:
             tile_first = hasattr(self.engine, "predict_city_ids")
 
             if not tile_first:
-                ade = self.engine.predict_ade_ids(pano_rgb)
-
-                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                pano_label = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                    if ade_id < 0:
-                        continue
-                    pano_label[ade == int(ade_id)] = np.uint8(int(dataset_id))
+                model_ids = self.engine.predict_city_ids(pano_rgb)
+                pano_label = remap_model_ids_to_dataset_ids(model_ids, cm)
 
             with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
                 td_path = Path(td)
                 pano_path = td_path / "pano.png"
-                label_path = td_path / "pano_label.png"
                 Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-                Image.fromarray(pano_label, mode="L").save(label_path)
+
+                if not tile_first:
+                    label_path = td_path / "pano_label.png"
+                    Image.fromarray(pano_label, mode="L").save(label_path)
 
                 rgb_outs = [td_path / f"{spec.name}.png" for spec in all_specs]
                 self.projector.project_many_rgb(pano_path, all_specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
@@ -375,12 +370,7 @@ class GeneratorPipeline:
 
                     if tile_first:
                         model_ids = self.engine.predict_city_ids(rgb)
-                        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                        lbl = np.full(model_ids.shape, int(unmapped), dtype=np.uint8)
-                        for model_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                            if model_id < 0:
-                                continue
-                            lbl[model_ids == int(model_id)] = np.uint8(int(dataset_id))
+                        lbl = remap_model_ids_to_dataset_ids(model_ids, cm)
                     else:
                         lbl_out = td_path / f"{spec.name}_lbl.png"
                         lbl = np.array(Image.open(lbl_out).convert("L"), dtype=np.uint8)

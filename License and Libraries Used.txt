@@ -34,6 +34,10 @@ Copyright (c) 2006      Idiap Research Institute (Samy Bengio)
 Copyright (c) 2001-2004 Idiap Research Institute (Ronan Collobert, Samy Bengio, Johnny Mariethoz)
 https://github.com/pytorch/pytorch/blob/main/LICENSE
 
-･Mask2Former (MIT)
-Copyright (c) 2022 Meta, Inc.
-https://github.com/facebookresearch/Mask2Former/blob/main/LICENSE
+･torchvision (BSD 3)
+Copyright (c) 2016 Meta, Inc. and PyTorch contributors
+https://github.com/pytorch/vision/blob/main/LICENSE
+
+･ffmpeg-python (Apache 2.0)
+Copyright (c) 2020 Christopher Hahn
+https://github.com/kkroening/ffmpeg-python/blob/master/LICENSE

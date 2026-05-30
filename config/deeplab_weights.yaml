@@ -1,5 +1,4 @@
-# Optional: URL to download DeepLab Cityscapes MobileNetV2 weights
-# Set this to a public URL hosting the .pth file. If empty, set the
-# environment variable DEEPLAB_WEIGHTS_URL instead when running.
+# Optional: URL to download the published Cityscapes DeepLabV3+ MobileNet checkpoint.
+# This is the checkpoint from cc-ai/Deeplabv3.
 
-deeplab_cityscapes_mobilenetv2_url: ""
+deeplab_cityscapes_mobilenetv2_url: "https://www.dropbox.com/s/753ojyvsh3vdjol/best_deeplabv3plus_mobilenet_cityscapes_os16.pth?dl=1"

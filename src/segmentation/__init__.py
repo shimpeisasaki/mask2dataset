@@ -1,1 +1,1 @@
-"""Segmentation utilities (Mask2Former + class mapping)."""
+"""Segmentation utilities (DeepLabV3 Cityscapes + class mapping)."""
