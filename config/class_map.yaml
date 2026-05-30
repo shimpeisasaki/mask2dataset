@@ -17,13 +17,10 @@ classes:
   1:
     name: avoid
     ade20k:
-      - building
-      - house
       - grass
       - earth
       - field
       - sand
-      - mountain
       - hill
       - rock
       - wall
@@ -34,6 +31,8 @@ classes:
       - door
       - tree
       - plant
+      - water
+      - runway
   2:
     name: path
     ade20k:
@@ -41,26 +40,151 @@ classes:
       - sidewalk
       - path
       - floor
+      - rug
   3:
     name: sky
     ade20k:
       - sky
   4:
     name: unlabeled
-    ade20k: []
+    ade20k:
+      - sea
+      - mountain
+      - building
+      - house
+      - ceiling
+      - bed
+      - windowpane
+      - cabinet
+      - table
+      - curtain
+      - chair
+      - car
+      - painting
+      - sofa
+      - shelf
+      - mirror
+      - armchair
+      - seat
+      - desk
+      - wardrobe
+      - lamp
+      - bathtub
+      - railing
+      - cushion
+      - base
+      - box
+      - column
+      - signboard
+      - chest of drawers
+      - counter
+      - sink
+      - skyscraper
+      - fireplace
+      - refrigerator
+      - grandstand
+      - case
+      - pool table
+      - pillow
+      - screen door
+      - stairway
+      - river
+      - bridge
+      - bookcase
+      - blind
+      - coffee table
+      - toilet
+      - flower
+      - book
+      - bench
+      - countertop
+      - stove
+      - palm
+      - kitchen island
+      - computer
+      - swivel chair
+      - boat
+      - bar
+      - arcade machine
+      - hovel
+      - bus
+      - towel
+      - light
+      - truck
+      - tower
+      - chandelier
+      - awning
+      - streetlight
+      - booth
+      - television receiver
+      - airplane
+      - dirt track
+      - apparel
+      - land
+      - bannister
+      - escalator
+      - ottoman
+      - bottle
+      - buffet
+      - poster
+      - stage
+      - van
+      - ship
+      - fountain
+      - conveyor belt
+      - canopy
+      - washer
+      - plaything
+      - swimming pool
+      - stool
+      - barrel
+      - basket
+      - waterfall
+      - tent
+      - bag
+      - minibike
+      - cradle
+      - oven
+      - ball
+      - food
+      - tank
+      - trade name
+      - microwave
+      - pot
+      - animal
+      - bicycle
+      - lake
+      - dishwasher
+      - screen
+      - blanket
+      - sculpture
+      - hood
+      - sconce
+      - vase
+      - traffic light
+      - tray
+      - ashcan
+      - fan
+      - pier
+      - crt screen
+      - plate
+      - monitor
+      - bulletin board
+      - shower
+      - radiator
+      - glass
+      - clock
+      - flag
 
 # Mapping summary — dataset classes (ordered):
 # 0: person (人)
 #   - person — 人
 #
 # 1: avoid (走行禁止)
-#   - building — 建物
-#   - house — 家
 #   - grass — 草地
 #   - earth — 土地／地面
 #   - field — 畑／フィールド
 #   - sand — 砂
-#   - mountain — 山
 #   - hill — 丘
 #   - rock — 岩
 #   - wall — 壁
@@ -71,18 +195,25 @@ classes:
 #   - door — ドア
 #   - tree — 木
 #   - plant — 植物
+#   - water — 水
+#   - runway — 滑走路
 #
 # 2: path (走行可能)
 #   - road — 道路
 #   - sidewalk — 歩道
 #   - path — 小道
 #   - floor — 床
+#   - rug — ラグ／敷物
 #
 # 3: sky (空)
 #   - sky — 空
 #
 # 4: unlabeled (アンラベル / その他)
 #   以下は `unlabeled` に分類される ADE20K ラベル（英名 — 日本語）:
+#   - sea — 海
+#   - mountain — 山
+#   - building — 建物
+#   - house — 家
 #   - ceiling — 天井
 #   - bed — ベッド
 #   - windowpane — 窓ガラス
@@ -91,13 +222,10 @@ classes:
 #   - curtain — カーテン
 #   - chair — 椅子
 #   - car — 車
-#   - water — 水
 #   - painting — 絵画
 #   - sofa — ソファ
 #   - shelf — 棚
-#   - sea — 海
 #   - mirror — 鏡
-#   - rug — ラグ／敷物
 #   - armchair — アームチェア
 #   - seat — 座席
 #   - desk — 机
@@ -117,7 +245,6 @@ classes:
 #   - fireplace — 暖炉
 #   - refrigerator — 冷蔵庫
 #   - grandstand — 観客席
-#   - runway — 滑走路
 #   - case — ケース
 #   - pool table — ビリヤード台
 #   - pillow — 枕
