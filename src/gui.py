@@ -74,6 +74,7 @@ class Tile:
     photo: Optional[ImageTk.PhotoImage] = None
     rgb: Optional[np.ndarray] = None
     seg: Optional[np.ndarray] = None
+    unlabeled_report: str = ""
 
 
 class AppGUI:
@@ -118,6 +119,8 @@ class AppGUI:
         self.tiles_up: List[Tile] = []
         self.tiles_mid: List[Tile] = []
         self.tiles_down: List[Tile] = []
+
+        self.var_preview2_report = tk.StringVar(value="")
 
         self._load_persisted_paths()
 
@@ -324,6 +327,15 @@ class AppGUI:
         ttk.Checkbutton(
             rowp2, text="セグメンテーション表示", variable=self.var_show_seg, command=self._on_toggle_show_seg
         ).pack(side="left", padx=(14, 0))
+
+        self.lbl_preview2_report = ttk.Label(
+            frm_p2,
+            textvariable=self.var_preview2_report,
+            justify="left",
+            anchor="w",
+            wraplength=1150,
+        )
+        self.lbl_preview2_report.pack(fill="x", padx=8, pady=(0, 6))
 
         # Rows: up (max 7), mid (max 6), down (max 6)
         self.frm_row_up = ttk.Frame(frm_p2)
@@ -749,8 +761,22 @@ class AppGUI:
         self.tiles_up = []
         self.tiles_mid = []
         self.tiles_down = []
+        self.var_preview2_report.set("")
 
-    def _set_tiles(self, container: ttk.Frame, images: List[np.ndarray], segs: List[np.ndarray], max_cols: int) -> List[Tile]:
+    def _on_preview2_tile_click(self, tile: Tile) -> None:
+        txt = (tile.unlabeled_report or "").strip()
+        if not txt:
+            txt = "unlabeled内訳: (空)"
+        self.var_preview2_report.set(txt)
+
+    def _set_tiles(
+        self,
+        container: ttk.Frame,
+        images: List[np.ndarray],
+        segs: List[np.ndarray],
+        reports: List[str],
+        max_cols: int,
+    ) -> List[Tile]:
         tiles: List[Tile] = []
         thumb = 160
         for i, (rgb, seg) in enumerate(zip(images, segs)):
@@ -762,7 +788,9 @@ class AppGUI:
             photo = ImageTk.PhotoImage(pil)
             lbl = tk.Label(container, image=photo, borderwidth=1, relief="solid")
             lbl.grid(row=0, column=i, padx=4, pady=2)
-            tile = Tile(label=lbl, photo=photo, rgb=rgb, seg=seg)
+            rep = reports[i] if i < len(reports) else ""
+            tile = Tile(label=lbl, photo=photo, rgb=rgb, seg=seg, unlabeled_report=rep)
+            lbl.bind("<Button-1>", lambda _e, t=tile: self._on_preview2_tile_click(t))
             tiles.append(tile)
         return tiles
 
@@ -804,11 +832,44 @@ class AppGUI:
                 return
 
             def apply() -> None:
-                self._clear_preview2()
-                self._build_legend()
-                self.tiles_up = self._set_tiles(self.frm_row_up, result.up_tiles_rgb, result.up_tiles_seg, max_cols=7)
-                self.tiles_mid = self._set_tiles(self.frm_row_mid, result.mid_tiles_rgb, result.mid_tiles_seg, max_cols=6)
-                self.tiles_down = self._set_tiles(self.frm_row_down, result.down_tiles_rgb, result.down_tiles_seg, max_cols=6)
+                try:
+                    self._clear_preview2()
+                    self._build_legend()
+
+                    up_rep = getattr(result, "up_tiles_unlabeled_report", [])
+                    mid_rep = getattr(result, "mid_tiles_unlabeled_report", [])
+                    down_rep = getattr(result, "down_tiles_unlabeled_report", [])
+
+                    self.tiles_up = self._set_tiles(
+                        self.frm_row_up,
+                        result.up_tiles_rgb,
+                        result.up_tiles_seg,
+                        list(up_rep) if isinstance(up_rep, list) else [],
+                        max_cols=7,
+                    )
+                    self.tiles_mid = self._set_tiles(
+                        self.frm_row_mid,
+                        result.mid_tiles_rgb,
+                        result.mid_tiles_seg,
+                        list(mid_rep) if isinstance(mid_rep, list) else [],
+                        max_cols=6,
+                    )
+                    self.tiles_down = self._set_tiles(
+                        self.frm_row_down,
+                        result.down_tiles_rgb,
+                        result.down_tiles_seg,
+                        list(down_rep) if isinstance(down_rep, list) else [],
+                        max_cols=6,
+                    )
+
+                    # Show first tile report by default (if exists)
+                    for grp in (self.tiles_up, self.tiles_mid, self.tiles_down):
+                        if grp:
+                            self._on_preview2_tile_click(grp[0])
+                            break
+                except Exception as e:
+                    self.logger.log(f"preview2 apply failed: {e}")
+                    self._clear_preview2()
 
             self.root.after(0, apply)
 

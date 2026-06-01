@@ -39,6 +39,8 @@ classes:
     ade20k:
       - floor
       - road
+      - earth
+      - land
       - sidewalk
       - rug
       - path
