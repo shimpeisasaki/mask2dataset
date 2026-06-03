@@ -149,15 +149,9 @@ class GeneratorPipeline:
         avoid_name: str = "avoid",
         path_name: str = "path",
     ) -> np.ndarray:
-        """Mark road/sidewalk boundary as avoid; classify road as path.
+        """Mark path-like/road-like boundary as avoid, then merge road-like into path.
 
-        This mirrors the Cityscapes converter logic:
-          1) Extract boundary between sidewalk and road -> set to avoid
-          2) Merge road into path
-
-        Notes:
-          - Boundary is computed on ADE ids (so road and sidewalk are still separable).
-          - Output label map `lbl` is modified in-place and returned.
+        Output label map `lbl` is modified in-place and returned.
         """
 
         if ade.shape != lbl.shape:
@@ -171,7 +165,6 @@ class GeneratorPipeline:
         earth_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("earth"))
         fountain_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("fountain"))
         water_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("water"))
-        sidewalk_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(sidewalk_name))
 
         # Build list of road-like ADE ids.
         road_ids = [int(x) for x in (road_id, pool_id, earth_id, fountain_id, water_id) if x is not None]
@@ -183,14 +176,10 @@ class GeneratorPipeline:
 
         # Non-road path-like ADE labels for step (1) boundary extraction.
         path_like_ids: List[int] = []
-        for nm in ("sidewalk", "floor", "rug", "path"):
+        for nm in (sidewalk_name, "floor", "rug", path_name):
             x = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(nm))
             if x is not None:
                 path_like_ids.append(int(x))
-
-        tree_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("tree"))
-        plant_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("plant"))
-        tree_plant_ids = [int(x) for x in (tree_id, plant_id) if x is not None]
 
         k = max(1, int(kernel_size))
         kernel = np.ones((k, k), np.uint8)
@@ -207,16 +196,6 @@ class GeneratorPipeline:
 
         # 2) Merge road-like ADE into path.
         lbl[np.isin(ade, road_ids)] = np.uint8(int(path_id))
-
-        # 3) Boundary between path and tree/plant -> avoid.
-        if tree_plant_ids:
-            path_mask = (lbl == np.uint8(int(path_id))).astype(np.uint8)
-            tree_plant_mask = np.isin(ade, tree_plant_ids).astype(np.uint8)
-
-            path_d = cv2.dilate(path_mask, kernel, iterations=1)
-            tree_plant_d = cv2.dilate(tree_plant_mask, kernel, iterations=1)
-            boundary_3 = cv2.bitwise_and(path_d, tree_plant_d)
-            lbl[boundary_3 > 0] = np.uint8(int(avoid_id))
 
         return lbl
 
