@@ -109,9 +109,12 @@ class PreviewResult:
     up_tiles_seg: List[np.ndarray]
     mid_tiles_seg: List[np.ndarray]
     down_tiles_seg: List[np.ndarray]
-    up_tiles_unlabeled_report: List[str]
-    mid_tiles_unlabeled_report: List[str]
-    down_tiles_unlabeled_report: List[str]
+    up_tiles_reports: List[Dict[str, str]]
+    mid_tiles_reports: List[Dict[str, str]]
+    down_tiles_reports: List[Dict[str, str]]
+    up_tile_names: List[str]
+    mid_tile_names: List[str]
+    down_tile_names: List[str]
 
 
 class GeneratorPipeline:
@@ -160,59 +163,84 @@ class GeneratorPipeline:
         if ade.shape != lbl.shape:
             raise ValueError("ade and lbl must have the same shape")
 
-        # Support treating multiple ADE labels (e.g. 'road' and 'land') as road-like.
+        # Support treating multiple ADE labels as road-like.
         road_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(road_name))
-        land_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("land"))
+        pool_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("pool"))
+        if pool_id is None:
+            pool_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("swimming pool"))
         earth_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("earth"))
+        fountain_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("fountain"))
+        water_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("water"))
         sidewalk_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(sidewalk_name))
 
-        # If sidewalk missing, nothing to do.
-        if sidewalk_id is None:
-            return lbl
-
-        # Build list of road-like ADE ids
-        road_ids = [int(x) for x in (road_id, land_id, earth_id) if x is not None]
+        # Build list of road-like ADE ids.
+        road_ids = [int(x) for x in (road_id, pool_id, earth_id, fountain_id, water_id) if x is not None]
         if not road_ids:
             return lbl
 
         avoid_id = GeneratorPipeline._dataset_id_by_name(cm, avoid_name, default=1)
         path_id = GeneratorPipeline._dataset_id_by_name(cm, path_name, default=2)
 
-        # 1) Force all road-like ADE -> path (boundary will override afterwards)
-        lbl[np.isin(ade, road_ids)] = np.uint8(int(path_id))
+        # Non-road path-like ADE labels for step (1) boundary extraction.
+        path_like_ids: List[int] = []
+        for nm in ("sidewalk", "floor", "rug", "path"):
+            x = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(nm))
+            if x is not None:
+                path_like_ids.append(int(x))
 
-        # 2) Boundary extraction between road-like and sidewalk
-        road_mask = np.isin(ade, road_ids).astype(np.uint8)
-        sidewalk_mask = (ade == int(sidewalk_id)).astype(np.uint8)
+        tree_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("tree"))
+        plant_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("plant"))
+        tree_plant_ids = [int(x) for x in (tree_id, plant_id) if x is not None]
 
         k = max(1, int(kernel_size))
         kernel = np.ones((k, k), np.uint8)
-        road_d = cv2.dilate(road_mask, kernel, iterations=1)
-        side_d = cv2.dilate(sidewalk_mask, kernel, iterations=1)
-        boundary = cv2.bitwise_and(road_d, side_d)
-        lbl[boundary > 0] = np.uint8(int(avoid_id))
+
+        # 1) Boundary between path-like and road-like -> avoid.
+        if path_like_ids:
+            path_like_mask = np.isin(ade, path_like_ids).astype(np.uint8)
+            road_like_mask = np.isin(ade, road_ids).astype(np.uint8)
+
+            path_like_d = cv2.dilate(path_like_mask, kernel, iterations=1)
+            road_like_d = cv2.dilate(road_like_mask, kernel, iterations=1)
+            boundary_1 = cv2.bitwise_and(path_like_d, road_like_d)
+            lbl[boundary_1 > 0] = np.uint8(int(avoid_id))
+
+        # 2) Merge road-like ADE into path.
+        lbl[np.isin(ade, road_ids)] = np.uint8(int(path_id))
+
+        # 3) Boundary between path and tree/plant -> avoid.
+        if tree_plant_ids:
+            path_mask = (lbl == np.uint8(int(path_id))).astype(np.uint8)
+            tree_plant_mask = np.isin(ade, tree_plant_ids).astype(np.uint8)
+
+            path_d = cv2.dilate(path_mask, kernel, iterations=1)
+            tree_plant_d = cv2.dilate(tree_plant_mask, kernel, iterations=1)
+            boundary_3 = cv2.bitwise_and(path_d, tree_plant_d)
+            lbl[boundary_3 > 0] = np.uint8(int(avoid_id))
+
         return lbl
 
     @staticmethod
-    def _format_unlabeled_report(
+    def _format_target_report(
         *,
         ade: np.ndarray,
         lbl: np.ndarray,
         id2label: Dict[int, str],
-        unlabeled_id: int,
+        target_id: int,
+        target_name: str,
         topk: int = 12,
     ) -> str:
         if ade.shape != lbl.shape:
-            return "[warn] unlabeled report: shape mismatch"
+            return f"[warn] {target_name} report: shape mismatch"
 
-        unlabeled_id_u8 = np.uint8(int(unlabeled_id))
-        mask = lbl == unlabeled_id_u8
+        target_id_u8 = np.uint8(int(target_id))
+        mask = lbl == target_id_u8
         total = int(lbl.size)
         cnt = int(mask.sum())
         if total <= 0:
-            return "[info] unlabeled: 0/0"
+            return f"[info] {target_name}: 0/0"
         if cnt <= 0:
-            return "[info] unlabeled: 0 (0.00%)"
+            return f"[info] {target_name}: 0 (0.00%)"
 
         ade_unl = ade[mask]
         counts: Dict[int, int] = {}
@@ -224,7 +252,7 @@ class GeneratorPipeline:
         ratio = cnt / float(total)
 
         lines: List[str] = []
-        lines.append(f"unlabeled: {cnt}/{total} ({ratio:.2%})")
+        lines.append(f"{target_name}: {cnt}/{total} ({ratio:.2%})")
         for ade_id, c in items:
             name = id2label.get(int(ade_id), "<unknown>")
             pct = c / float(cnt)
@@ -269,9 +297,9 @@ class GeneratorPipeline:
         specs: Sequence[ViewSpec],
         cfg: ExtractConfig,
         cm: ClassMap,
-    ) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[str]]:
+    ) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[Dict[str, str]], List[str]]:
         if not specs:
-            return [], [], [], []
+            return [], [], [], [], []
 
         rgb_outs = [td_path / f"{spec.name}.png" for spec in specs]
         self.projector.project_many_rgb(pano_path, specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
@@ -279,27 +307,53 @@ class GeneratorPipeline:
         rgbs: List[np.ndarray] = []
         labels: List[np.ndarray] = []
         segs: List[np.ndarray] = []
-        reports: List[str] = []
+        reports: List[Dict[str, str]] = []
+        names: List[str] = []
 
         unlabeled_id = self._dataset_id_by_name(cm, "unlabeled", default=5)
+        avoid_id = self._dataset_id_by_name(cm, "avoid", default=1)
+        path_id = self._dataset_id_by_name(cm, "path", default=2)
         id2label = self.engine.id2label
-        for rgb_p in rgb_outs:
+        for spec, rgb_p in zip(specs, rgb_outs):
             rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
             ade = self.engine.predict_ade_ids(rgb)
             lbl = self._remap_ade_to_dataset_ids(ade, cm)
             lbl = self._postprocess_road_sidewalk_boundary(ade=ade, lbl=lbl, cm=cm)
-            reports.append(
-                self._format_unlabeled_report(
+            reports.append({
+                "unlabeled": self._format_target_report(
                     ade=ade,
                     lbl=lbl,
                     id2label=id2label,
-                    unlabeled_id=unlabeled_id,
-                )
-            )
+                    target_id=unlabeled_id,
+                    target_name="unlabeled",
+                ),
+                "avoid": self._format_target_report(
+                    ade=ade,
+                    lbl=lbl,
+                    id2label=id2label,
+                    target_id=avoid_id,
+                    target_name="avoid",
+                ),
+                "path": self._format_target_report(
+                    ade=ade,
+                    lbl=lbl,
+                    id2label=id2label,
+                    target_id=path_id,
+                    target_name="path",
+                ),
+            })
             rgbs.append(rgb)
             labels.append(lbl)
             segs.append(overlay_segmentation(rgb, lbl))
-        return rgbs, labels, segs, reports
+            names.append(spec.name)
+        return rgbs, labels, segs, reports, names
+
+    @staticmethod
+    def _filter_specs_by_names(specs: Sequence[ViewSpec], include_names: Optional[Sequence[str]]) -> List[ViewSpec]:
+        if include_names is None:
+            return list(specs)
+        want = set(str(x) for x in include_names)
+        return [s for s in specs if s.name in want]
 
     def build_preview(
         self,
@@ -322,9 +376,9 @@ class GeneratorPipeline:
             pano_path = td_path / "pano.png"
             Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
 
-            up_rgb, _, up_seg, up_rep = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=up_specs, cfg=cfg, cm=cm)
-            mid_rgb, _, mid_seg, mid_rep = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=mid_specs, cfg=cfg, cm=cm)
-            down_rgb, _, down_seg, down_rep = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=down_specs, cfg=cfg, cm=cm)
+            up_rgb, _, up_seg, up_rep, up_names = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=up_specs, cfg=cfg, cm=cm)
+            mid_rgb, _, mid_seg, mid_rep, mid_names = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=mid_specs, cfg=cfg, cm=cm)
+            down_rgb, _, down_seg, down_rep, down_names = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=down_specs, cfg=cfg, cm=cm)
 
         return PreviewResult(
             preview1_rgb=pano_rgb,
@@ -335,9 +389,12 @@ class GeneratorPipeline:
             up_tiles_seg=up_seg,
             mid_tiles_seg=mid_seg,
             down_tiles_seg=down_seg,
-            up_tiles_unlabeled_report=up_rep,
-            mid_tiles_unlabeled_report=mid_rep,
-            down_tiles_unlabeled_report=down_rep,
+            up_tiles_reports=up_rep,
+            mid_tiles_reports=mid_rep,
+            down_tiles_reports=down_rep,
+            up_tile_names=up_names,
+            mid_tile_names=mid_names,
+            down_tile_names=down_names,
         )
 
     def generate_dataset_from_images(
@@ -346,6 +403,7 @@ class GeneratorPipeline:
         image_paths: Sequence[Path],
         output_root: Path,
         cfg: ExtractConfig,
+        include_spec_names: Optional[Sequence[str]] = None,
     ) -> None:
         cm = self._ensure_class_map()
         writer = MMSegDatasetWriter(root=output_root)
@@ -355,6 +413,9 @@ class GeneratorPipeline:
 
         up_specs, mid_specs, down_specs = build_view_specs(cfg)
         all_specs = list(up_specs) + list(mid_specs) + list(down_specs)
+        all_specs = self._filter_specs_by_names(all_specs, include_spec_names)
+        if not all_specs:
+            raise ValueError("no enabled view directions to generate")
 
         self.logger.log(f"Generate from images: count={len(image_paths)} views={len(all_specs)}")
 
@@ -377,7 +438,7 @@ class GeneratorPipeline:
                 pano_path = td_path / "pano.png"
                 Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
 
-                rgb_tiles, lbl_tiles, _, _ = self._project_and_segment_group(
+                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
                     td_path=td_path,
                     pano_path=pano_path,
                     specs=all_specs,
@@ -402,6 +463,7 @@ class GeneratorPipeline:
         output_root: Path,
         fps: float,
         cfg: ExtractConfig,
+        include_spec_names: Optional[Sequence[str]] = None,
     ) -> None:
         cm = self._ensure_class_map()
         writer = MMSegDatasetWriter(root=output_root)
@@ -411,6 +473,9 @@ class GeneratorPipeline:
 
         up_specs, mid_specs, down_specs = build_view_specs(cfg)
         all_specs = list(up_specs) + list(mid_specs) + list(down_specs)
+        all_specs = self._filter_specs_by_names(all_specs, include_spec_names)
+        if not all_specs:
+            raise ValueError("no enabled view directions to generate")
 
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
@@ -448,7 +513,7 @@ class GeneratorPipeline:
                 pano_path = td_path / "pano.png"
                 Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
 
-                rgb_tiles, lbl_tiles, _, _ = self._project_and_segment_group(
+                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
                     td_path=td_path,
                     pano_path=pano_path,
                     specs=all_specs,

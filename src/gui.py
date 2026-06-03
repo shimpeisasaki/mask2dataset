@@ -7,7 +7,7 @@ import threading
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -74,7 +74,9 @@ class Tile:
     photo: Optional[ImageTk.PhotoImage] = None
     rgb: Optional[np.ndarray] = None
     seg: Optional[np.ndarray] = None
-    unlabeled_report: str = ""
+    reports_by_class: Optional[Dict[str, str]] = None
+    spec_name: str = ""
+    selected_var: Optional[tk.BooleanVar] = None
 
 
 class AppGUI:
@@ -119,8 +121,12 @@ class AppGUI:
         self.tiles_up: List[Tile] = []
         self.tiles_mid: List[Tile] = []
         self.tiles_down: List[Tile] = []
+        self.preview2_enabled_specs: Dict[str, bool] = {}
+        self._preview2_auto_after_id: Optional[str] = None
 
         self.var_preview2_report = tk.StringVar(value="")
+        self.var_preview2_report_kind = tk.StringVar(value="unlabeled")
+        self._preview2_active_tile: Optional[Tile] = None
 
         self._load_persisted_paths()
 
@@ -130,6 +136,7 @@ class AppGUI:
         self.pipeline = GeneratorPipeline(logger=self.logger)
 
         self._build_legend()
+        self._clear_preview2()
 
         self._refresh_input_state()
 
@@ -226,62 +233,15 @@ class AppGUI:
         self.ent_output.bind("<FocusOut>", lambda _e: self._persist_paths())
         ttk.Button(row3, text="参照", command=self._browse_output_dir).pack(side="left")
 
-        # Preview1 + (settings + legend) + preview2
+        # Settings -> (Preview1 + legend) -> Preview2
         body = ttk.Frame(main)
         body.pack(fill="both", expand=True, padx=10, pady=(0, 8))
 
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
 
-        frm_p1 = ttk.LabelFrame(left, text="プレビュー1 (正面指定: yawスライダー)")
-        frm_p1.pack(fill="x", padx=0, pady=6)
-        self.frm_p1 = frm_p1
-
-        rowp = ttk.Frame(frm_p1)
-        rowp.pack(fill="x", padx=8, pady=4)
-        self.btn_prev_image = ttk.Button(rowp, text="←", command=self._on_prev_image, width=3)
-        self.btn_prev_image.pack(side="left")
-        self.btn_next_image = ttk.Button(rowp, text="→", command=self._on_next_image, width=3)
-        self.btn_next_image.pack(side="left", padx=(4, 12))
-
-        ttk.Label(rowp, text="プレビュー時刻[秒]").pack(side="left")
-        self.ent_preview_time = ttk.Entry(rowp, textvariable=self.var_preview_time, width=10)
-        self.ent_preview_time.pack(side="left", padx=(6, 0))
-        self.ent_preview_time.bind("<Return>", lambda _e: self._on_preview1())
-        self.ent_preview_time.bind("<FocusOut>", lambda _e: self._on_preview1())
-
-        self.lbl_time = ttk.Label(rowp, text="")
-        self.lbl_time.pack(side="left", padx=(10, 0))
-
-        self.lbl_image_idx = ttk.Label(rowp, text="")
-        self.lbl_image_idx.pack(side="right")
-
-        self.yaw_slider = tk.Scale(
-            frm_p1,
-            from_=-180,
-            to=180,
-            orient="horizontal",
-            resolution=1,
-            variable=self.var_yaw_offset,
-            length=900,
-            command=lambda _v: self._refresh_preview1_overlay(),
-        )
-        self.yaw_slider.pack(fill="x", padx=8, pady=(0, 4))
-
-        self.lbl_preview1 = tk.Label(frm_p1, borderwidth=1, relief="solid")
-        self.lbl_preview1.pack(fill="x", padx=8, pady=(0, 8))
-
-        frm_mid = ttk.Frame(left)
-        frm_mid.pack(fill="x", padx=0, pady=(0, 6))
-        frm_mid.grid_columnconfigure(0, weight=1)
-        frm_mid.grid_columnconfigure(1, weight=1)
-
-        frm_set = ttk.LabelFrame(frm_mid, text="切り出し設定")
-        frm_set.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
-
-        frm_legend = ttk.LabelFrame(frm_mid, text="クラス凡例")
-        frm_legend.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
-        self.frm_legend = frm_legend
+        frm_set = ttk.LabelFrame(left, text="切り出し設定")
+        frm_set.pack(fill="x", padx=0, pady=6)
 
         r0 = ttk.Frame(frm_set)
         r0.pack(fill="x", padx=8, pady=4)
@@ -317,6 +277,58 @@ class AppGUI:
         ttk.Checkbutton(grid, text="4分割", variable=self.var_down_4).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(grid, text="6分割", variable=self.var_down_6).grid(row=2, column=2, sticky="w")
 
+        frm_p1_legend = ttk.Frame(left)
+        frm_p1_legend.pack(fill="x", padx=0, pady=6)
+        # width ratio: preview1 : legend = 4 : 6
+        frm_p1_legend.grid_columnconfigure(0, weight=4)
+        frm_p1_legend.grid_columnconfigure(1, weight=6)
+
+        frm_p1 = ttk.LabelFrame(frm_p1_legend, text="プレビュー1 (正面指定: yawスライダー)")
+        frm_p1.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
+        self.frm_p1 = frm_p1
+
+        frm_legend = ttk.LabelFrame(frm_p1_legend, text="クラス凡例")
+        frm_legend.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        self.frm_legend = frm_legend
+
+        self.lbl_preview1 = tk.Label(frm_p1, borderwidth=1, relief="solid")
+        self.lbl_preview1.pack(fill="x", padx=8, pady=(8, 8))
+
+        self.yaw_slider = tk.Scale(
+            frm_p1,
+            from_=-180,
+            to=180,
+            orient="horizontal",
+            resolution=1,
+            variable=self.var_yaw_offset,
+            length=900,
+            command=lambda _v: self._refresh_preview1_overlay(),
+        )
+        self.yaw_slider.pack(fill="x", padx=8, pady=(0, 4))
+
+        rowp = ttk.Frame(frm_p1)
+        rowp.pack(fill="x", padx=8, pady=(0, 8))
+        self.btn_prev_image = ttk.Button(rowp, text="←", command=self._on_prev_image, width=3)
+        self.btn_prev_image.pack(side="left")
+        self.btn_next_image = ttk.Button(rowp, text="→", command=self._on_next_image, width=3)
+        self.btn_next_image.pack(side="left", padx=(4, 12))
+
+        ttk.Label(rowp, text="プレビュー時刻[秒]").pack(side="left")
+        self.btn_time_minus = ttk.Button(rowp, text="◀", width=3, command=lambda: self._shift_preview_time(-1.0))
+        self.btn_time_minus.pack(side="left", padx=(6, 2))
+        self.ent_preview_time = ttk.Entry(rowp, textvariable=self.var_preview_time, width=10)
+        self.ent_preview_time.pack(side="left", padx=(0, 2))
+        self.ent_preview_time.bind("<Return>", lambda _e: self._on_preview1())
+        self.ent_preview_time.bind("<FocusOut>", lambda _e: self._on_preview1())
+        self.btn_time_plus = ttk.Button(rowp, text="▶", width=3, command=lambda: self._shift_preview_time(+1.0))
+        self.btn_time_plus.pack(side="left", padx=(2, 0))
+
+        self.lbl_time = ttk.Label(rowp, text="")
+        self.lbl_time.pack(side="left", padx=(10, 0))
+
+        self.lbl_image_idx = ttk.Label(rowp, text="")
+        self.lbl_image_idx.pack(side="right")
+
         frm_p2 = ttk.LabelFrame(left, text="プレビュー2")
         frm_p2.pack(fill="both", expand=True, padx=0, pady=6)
         self.frm_p2 = frm_p2
@@ -327,6 +339,16 @@ class AppGUI:
         ttk.Checkbutton(
             rowp2, text="セグメンテーション表示", variable=self.var_show_seg, command=self._on_toggle_show_seg
         ).pack(side="left", padx=(14, 0))
+        ttk.Label(rowp2, text="内訳表示:").pack(side="left", padx=(14, 4))
+        cmb = ttk.Combobox(
+            rowp2,
+            textvariable=self.var_preview2_report_kind,
+            values=("unlabeled", "avoid", "path"),
+            width=12,
+            state="readonly",
+        )
+        cmb.pack(side="left")
+        cmb.bind("<<ComboboxSelected>>", lambda _e: self._refresh_preview2_report_for_active_tile())
 
         self.lbl_preview2_report = ttk.Label(
             frm_p2,
@@ -336,6 +358,8 @@ class AppGUI:
             wraplength=1150,
         )
         self.lbl_preview2_report.pack(fill="x", padx=8, pady=(0, 6))
+
+        ttk.Label(frm_p2, text="※ タイル下のチェックを外すと実行時にその方向を除外します").pack(fill="x", padx=8, pady=(0, 4))
 
         # Rows: up (max 7), mid (max 6), down (max 6)
         self.frm_row_up = ttk.Frame(frm_p2)
@@ -393,8 +417,8 @@ class AppGUI:
         grid = ttk.Frame(frm)
         grid.pack(fill="x", padx=8, pady=6)
 
-        # Keep this compact for side-by-side layout.
-        cols = 2
+        # Show one class per row.
+        cols = 1
         for i, (cls_id, cls_name) in enumerate(names.items()):
             if not (0 <= cls_id < len(palette)):
                 continue
@@ -497,6 +521,33 @@ class AppGUI:
             self.var_preview_time.set("0.0")
         self._on_preview1()
 
+    def _shift_preview_time(self, delta_s: float) -> None:
+        if self.var_input_type.get() != "video":
+            return
+        try:
+            t = float(self.var_preview_time.get())
+        except Exception:
+            t = 0.0
+        t = max(0.0, float(t) + float(delta_s))
+        txt = f"{t:.3f}".rstrip("0").rstrip(".")
+        self.var_preview_time.set(txt if txt else "0")
+        self._on_preview1()
+
+    def _schedule_preview2_auto_refresh(self) -> None:
+        if self.var_input_type.get() != "video":
+            return
+        if self._preview2_auto_after_id is not None:
+            try:
+                self.root.after_cancel(self._preview2_auto_after_id)
+            except Exception:
+                pass
+
+        def _run() -> None:
+            self._preview2_auto_after_id = None
+            self._on_preview2()
+
+        self._preview2_auto_after_id = self.root.after(150, _run)
+
     def _on_images_dir_edited(self) -> None:
         self._persist_paths()
         folder_str = self.var_images_dir.get().strip()
@@ -519,6 +570,8 @@ class AppGUI:
         state_images = "normal" if not is_video else "disabled"
 
         for w in (self.ent_video, self.btn_video, self.ent_fps, self.ent_preview_time):
+            w.configure(state=state_video)
+        for w in (self.btn_time_minus, self.btn_time_plus):
             w.configure(state=state_video)
         for w in (self.ent_images, self.btn_images):
             w.configure(state=state_images)
@@ -729,6 +782,9 @@ class AppGUI:
         else:
             self.lbl_time.config(text=f"t = {t:.2f} s")
 
+        if self.var_input_type.get() == "video":
+            self._schedule_preview2_auto_refresh()
+
     def _refresh_preview1_overlay(self) -> None:
         if self.preview1_rgb is None:
             return
@@ -745,7 +801,7 @@ class AppGUI:
 
         pil = _pil_from_rgb(img)
         # Scale to fit
-        max_w = 980
+        max_w = 490
         scale = min(1.0, max_w / max(1, pil.size[0]))
         pil = pil.resize((int(pil.size[0] * scale), int(pil.size[1] * scale)), Image.Resampling.BILINEAR)
 
@@ -761,12 +817,35 @@ class AppGUI:
         self.tiles_up = []
         self.tiles_mid = []
         self.tiles_down = []
+        self._preview2_active_tile = None
         self.var_preview2_report.set("")
+        self._repack_preview2_rows()
+
+    def _repack_preview2_rows(self) -> None:
+        rows = [
+            (self.frm_row_up, self.tiles_up),
+            (self.frm_row_mid, self.tiles_mid),
+            (self.frm_row_down, self.tiles_down),
+        ]
+        for frm, _tiles in rows:
+            frm.pack_forget()
+        for frm, tiles in rows:
+            if tiles:
+                frm.pack(fill="x", padx=8, pady=4)
+
+    def _refresh_preview2_report_for_active_tile(self) -> None:
+        if self._preview2_active_tile is None:
+            self.var_preview2_report.set("")
+            return
+        self._on_preview2_tile_click(self._preview2_active_tile)
 
     def _on_preview2_tile_click(self, tile: Tile) -> None:
-        txt = (tile.unlabeled_report or "").strip()
+        self._preview2_active_tile = tile
+        key = (self.var_preview2_report_kind.get() or "unlabeled").strip().lower()
+        reports = tile.reports_by_class or {}
+        txt = str(reports.get(key, "")).strip()
         if not txt:
-            txt = "unlabeled内訳: (空)"
+            txt = f"{key}内訳: (空)"
         self.var_preview2_report.set(txt)
 
     def _set_tiles(
@@ -774,11 +853,12 @@ class AppGUI:
         container: ttk.Frame,
         images: List[np.ndarray],
         segs: List[np.ndarray],
-        reports: List[str],
+        names: List[str],
+        reports: List[Dict[str, str]],
         max_cols: int,
     ) -> List[Tile]:
         tiles: List[Tile] = []
-        thumb = 160
+        thumb = 304
         for i, (rgb, seg) in enumerate(zip(images, segs)):
             if i >= max_cols:
                 break
@@ -786,10 +866,31 @@ class AppGUI:
             pil = _pil_from_rgb(show)
             pil.thumbnail((thumb, thumb), Image.Resampling.BILINEAR)
             photo = ImageTk.PhotoImage(pil)
-            lbl = tk.Label(container, image=photo, borderwidth=1, relief="solid")
-            lbl.grid(row=0, column=i, padx=4, pady=2)
-            rep = reports[i] if i < len(reports) else ""
-            tile = Tile(label=lbl, photo=photo, rgb=rgb, seg=seg, unlabeled_report=rep)
+            item = ttk.Frame(container)
+            item.grid(row=0, column=i, padx=4, pady=2, sticky="n")
+            lbl = tk.Label(item, image=photo, borderwidth=1, relief="solid")
+            lbl.pack()
+            rep = reports[i] if i < len(reports) and isinstance(reports[i], dict) else {}
+            spec_name = names[i] if i < len(names) else f"tile_{i}"
+
+            if spec_name not in self.preview2_enabled_specs:
+                self.preview2_enabled_specs[spec_name] = True
+            var_sel = tk.BooleanVar(value=bool(self.preview2_enabled_specs.get(spec_name, True)))
+
+            def _on_sel_change(name: str = spec_name, v: tk.BooleanVar = var_sel) -> None:
+                self.preview2_enabled_specs[name] = bool(v.get())
+
+            ttk.Checkbutton(item, text=spec_name, variable=var_sel, command=_on_sel_change).pack(anchor="w")
+
+            tile = Tile(
+                label=lbl,
+                photo=photo,
+                rgb=rgb,
+                seg=seg,
+                reports_by_class=rep,
+                spec_name=spec_name,
+                selected_var=var_sel,
+            )
             lbl.bind("<Button-1>", lambda _e, t=tile: self._on_preview2_tile_click(t))
             tiles.append(tile)
         return tiles
@@ -801,7 +902,7 @@ class AppGUI:
                     continue
                 show = tile.seg if self.var_show_seg.get() else tile.rgb
                 pil = _pil_from_rgb(show)
-                pil.thumbnail((160, 160), Image.Resampling.BILINEAR)
+                pil.thumbnail((304, 304), Image.Resampling.BILINEAR)
                 tile.photo = ImageTk.PhotoImage(pil)
                 tile.label.configure(image=tile.photo)
 
@@ -836,14 +937,18 @@ class AppGUI:
                     self._clear_preview2()
                     self._build_legend()
 
-                    up_rep = getattr(result, "up_tiles_unlabeled_report", [])
-                    mid_rep = getattr(result, "mid_tiles_unlabeled_report", [])
-                    down_rep = getattr(result, "down_tiles_unlabeled_report", [])
+                    up_rep = getattr(result, "up_tiles_reports", [])
+                    mid_rep = getattr(result, "mid_tiles_reports", [])
+                    down_rep = getattr(result, "down_tiles_reports", [])
+                    up_names = getattr(result, "up_tile_names", [])
+                    mid_names = getattr(result, "mid_tile_names", [])
+                    down_names = getattr(result, "down_tile_names", [])
 
                     self.tiles_up = self._set_tiles(
                         self.frm_row_up,
                         result.up_tiles_rgb,
                         result.up_tiles_seg,
+                        list(up_names) if isinstance(up_names, list) else [],
                         list(up_rep) if isinstance(up_rep, list) else [],
                         max_cols=7,
                     )
@@ -851,6 +956,7 @@ class AppGUI:
                         self.frm_row_mid,
                         result.mid_tiles_rgb,
                         result.mid_tiles_seg,
+                        list(mid_names) if isinstance(mid_names, list) else [],
                         list(mid_rep) if isinstance(mid_rep, list) else [],
                         max_cols=6,
                     )
@@ -858,9 +964,12 @@ class AppGUI:
                         self.frm_row_down,
                         result.down_tiles_rgb,
                         result.down_tiles_seg,
+                        list(down_names) if isinstance(down_names, list) else [],
                         list(down_rep) if isinstance(down_rep, list) else [],
                         max_cols=6,
                     )
+
+                    self._repack_preview2_rows()
 
                     # Show first tile report by default (if exists)
                     for grp in (self.tiles_up, self.tiles_mid, self.tiles_down):
@@ -874,6 +983,17 @@ class AppGUI:
             self.root.after(0, apply)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _selected_spec_names_for_run(self, cfg: ExtractConfig) -> List[str]:
+        from src.pipeline import build_view_specs
+
+        up, mid, down = build_view_specs(cfg)
+        all_names = [s.name for s in (list(up) + list(mid) + list(down))]
+        if not self.preview2_enabled_specs:
+            return all_names
+
+        selected = [name for name in all_names if bool(self.preview2_enabled_specs.get(name, True))]
+        return selected
 
     def _on_run(self) -> None:
         try:
@@ -906,7 +1026,16 @@ class AppGUI:
                         raise ValueError("FPSは数値で入力してください")
                     if fps <= 0:
                         raise ValueError("FPSは0より大きくしてください")
-                    self.pipeline.generate_dataset_from_video(video_path=video, output_root=out_dir, fps=fps, cfg=cfg)
+                    selected_names = self._selected_spec_names_for_run(cfg)
+                    if not selected_names:
+                        raise ValueError("実行対象の方向が選択されていません（プレビュー2のチェックを1つ以上ONにしてください）")
+                    self.pipeline.generate_dataset_from_video(
+                        video_path=video,
+                        output_root=out_dir,
+                        fps=fps,
+                        cfg=cfg,
+                        include_spec_names=selected_names,
+                    )
                 else:
                     folder_str = self.var_images_dir.get().strip()
                     if not folder_str:
@@ -921,7 +1050,15 @@ class AppGUI:
                     files = sorted(set(files))
                     if not files:
                         raise ValueError("画像フォルダに画像がありません")
-                    self.pipeline.generate_dataset_from_images(image_paths=files, output_root=out_dir, cfg=cfg)
+                    selected_names = self._selected_spec_names_for_run(cfg)
+                    if not selected_names:
+                        raise ValueError("実行対象の方向が選択されていません（プレビュー2のチェックを1つ以上ONにしてください）")
+                    self.pipeline.generate_dataset_from_images(
+                        image_paths=files,
+                        output_root=out_dir,
+                        cfg=cfg,
+                        include_spec_names=selected_names,
+                    )
 
             except Exception as e:
                 self.logger.log(f"run failed: {e}")

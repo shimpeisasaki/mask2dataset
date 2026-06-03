@@ -22,14 +22,12 @@ classes:
       - windowpane
       - grass
       - door
-      - water
       - field
       - fence
       - railing
       - column
       - sand
       - stairs
-      - runway
       - stairway
       - pole
       - escalator
@@ -40,7 +38,9 @@ classes:
       - floor
       - road
       - earth
-      - land
+      - water
+      - fountain
+      - swimming pool
       - sidewalk
       - rug
       - path
