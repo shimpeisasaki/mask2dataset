@@ -4,16 +4,16 @@ import random
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from src.dataset.writer import MMSegDatasetWriter
+from src.dataset.writer import CocoDatasetWriter
 from src.segmentation.class_map import ClassMap
 from src.segmentation.mask2former import Mask2FormerADEEngine
-from src.segmentation.palette import default_palette_8
+from src.segmentation.palette import default_palette
 from src.utils.logging import Logger
 from src.v360 import V360Projector, ViewSpec
 
@@ -23,6 +23,8 @@ class ExtractConfig:
     fov: float  # 90, 120, or 150
     out_size: int
     yaw_offset: float  # slider value in [-180, 180]
+    up_pitch_deg: float
+    down_pitch_deg: float
 
     use_up_4: bool
     use_up_6: bool
@@ -36,6 +38,17 @@ class ExtractConfig:
 def build_view_specs(cfg: ExtractConfig) -> Tuple[List[ViewSpec], List[ViewSpec], List[ViewSpec]]:
     """Returns (up_row, mid_row, down_row) specs."""
     yaw_center = (float(cfg.yaw_offset) + 180.0) % 360.0
+    up_pitch = float(cfg.up_pitch_deg)
+    down_pitch = float(cfg.down_pitch_deg)
+
+    def angle_token(v: float) -> str:
+        x = abs(float(v))
+        if abs(x - round(x)) < 1e-6:
+            return str(int(round(x)))
+        return f"{x:.1f}".replace(".", "p")
+
+    up_tag = f"up{angle_token(up_pitch)}"
+    down_tag = f"down{angle_token(down_pitch)}"
 
     def yaws(n: int) -> List[float]:
         step = 360.0 / float(n)
@@ -47,10 +60,10 @@ def build_view_specs(cfg: ExtractConfig) -> Tuple[List[ViewSpec], List[ViewSpec]
 
     if cfg.use_up_4:
         for i, yaw in enumerate(yaws(4)):
-            up.append(ViewSpec(name=f"up45_4_{i}", yaw=yaw, pitch=+45.0))
+            up.append(ViewSpec(name=f"{up_tag}_4_{i}", yaw=yaw, pitch=up_pitch))
     if cfg.use_up_6:
         for i, yaw in enumerate(yaws(6)):
-            up.append(ViewSpec(name=f"up45_6_{i}", yaw=yaw, pitch=+45.0))
+            up.append(ViewSpec(name=f"{up_tag}_6_{i}", yaw=yaw, pitch=up_pitch))
     if cfg.use_top:
         up.append(ViewSpec(name="top", yaw=yaw_center, pitch=+90.0))
 
@@ -63,10 +76,10 @@ def build_view_specs(cfg: ExtractConfig) -> Tuple[List[ViewSpec], List[ViewSpec]
 
     if cfg.use_down_4:
         for i, yaw in enumerate(yaws(4)):
-            down.append(ViewSpec(name=f"down45_4_{i}", yaw=yaw, pitch=-45.0))
+            down.append(ViewSpec(name=f"{down_tag}_4_{i}", yaw=yaw, pitch=down_pitch))
     if cfg.use_down_6:
         for i, yaw in enumerate(yaws(6)):
-            down.append(ViewSpec(name=f"down45_6_{i}", yaw=yaw, pitch=-45.0))
+            down.append(ViewSpec(name=f"{down_tag}_6_{i}", yaw=yaw, pitch=down_pitch))
 
     return up, mid, down
 
@@ -80,16 +93,32 @@ def resize_equirect_for_speed(bgr: np.ndarray, out_size: int) -> np.ndarray:
     return cv2.resize(bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
 
-def overlay_segmentation(rgb: np.ndarray, label: np.ndarray, alpha: float = 0.45) -> np.ndarray:
-    palette = default_palette_8()
+def overlay_segmentation(
+    rgb: np.ndarray,
+    label: np.ndarray,
+    alpha: float = 0.45,
+    palette_by_class: Optional[Dict[int, Tuple[int, int, int]]] = None,
+) -> np.ndarray:
+    max_id = int(label[label != 255].max()) if np.any(label != 255) else 0
+    palette = default_palette(max_id + 1)
     out = rgb.copy()
     color = np.zeros_like(out)
 
-    for cls_id in range(8):
-        mask = label == cls_id
+    class_ids = np.unique(label)
+    for cls_id_raw in class_ids.tolist():
+        cls_id = int(cls_id_raw)
+        if cls_id == 255 or cls_id < 0:
+            continue
+        mask = label == np.uint8(cls_id)
         if not np.any(mask):
             continue
-        r, g, b = palette[cls_id]
+        if palette_by_class is not None and cls_id in palette_by_class:
+            r, g, b = palette_by_class[cls_id]
+        elif cls_id < len(palette):
+            r, g, b = palette[cls_id]
+        else:
+            ext = default_palette(cls_id + 1)
+            r, g, b = ext[cls_id]
         color[mask] = (r, g, b)
 
     ignore_mask = label == 255
@@ -122,8 +151,16 @@ class GeneratorPipeline:
         self.logger = logger or Logger()
         self.projector = V360Projector(ffmpeg=ffmpeg)
         self.engine = Mask2FormerADEEngine()
-        self.class_map_path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
+        self.class_map_path = Path(__file__).resolve().parent.parent / "config" / "new_class_map.yaml"
+        self.palette_by_class: Dict[int, Tuple[int, int, int]] = {}
         self._class_map: Optional[ClassMap] = None
+
+    def set_palette_overrides(self, palette_by_class: Dict[int, Tuple[int, int, int]]) -> None:
+        self.palette_by_class = {
+            int(k): (int(v[0]), int(v[1]), int(v[2]))
+            for k, v in palette_by_class.items()
+            if 0 <= int(k) <= 254 and isinstance(v, (tuple, list)) and len(v) == 3
+        }
 
     @staticmethod
     def _normalize_label_name(name: str) -> str:
@@ -136,68 +173,6 @@ class GeneratorPipeline:
             if GeneratorPipeline._normalize_label_name(dataset_name) == want:
                 return int(dataset_id)
         return int(default)
-
-    @staticmethod
-    def _postprocess_road_sidewalk_boundary(
-        *,
-        ade: np.ndarray,
-        lbl: np.ndarray,
-        cm: ClassMap,
-        kernel_size: int = 10,
-        road_name: str = "road",
-        sidewalk_name: str = "sidewalk",
-        avoid_name: str = "avoid",
-        path_name: str = "path",
-    ) -> np.ndarray:
-        """Mark path-like/road-like boundary as avoid, then merge road-like into path.
-
-        Output label map `lbl` is modified in-place and returned.
-        """
-
-        if ade.shape != lbl.shape:
-            raise ValueError("ade and lbl must have the same shape")
-
-        # Support treating multiple ADE labels as road-like.
-        road_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(road_name))
-        pool_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("pool"))
-        if pool_id is None:
-            pool_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("swimming pool"))
-        earth_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("earth"))
-        fountain_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("fountain"))
-        water_id = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name("water"))
-
-        # Build list of road-like ADE ids.
-        road_ids = [int(x) for x in (road_id, pool_id, earth_id, fountain_id, water_id) if x is not None]
-        if not road_ids:
-            return lbl
-
-        avoid_id = GeneratorPipeline._dataset_id_by_name(cm, avoid_name, default=1)
-        path_id = GeneratorPipeline._dataset_id_by_name(cm, path_name, default=2)
-
-        # Non-road path-like ADE labels for step (1) boundary extraction.
-        path_like_ids: List[int] = []
-        for nm in (sidewalk_name, "floor", "rug", path_name):
-            x = cm.ade_name_to_id.get(GeneratorPipeline._normalize_label_name(nm))
-            if x is not None:
-                path_like_ids.append(int(x))
-
-        k = max(1, int(kernel_size))
-        kernel = np.ones((k, k), np.uint8)
-
-        # 1) Boundary between path-like and road-like -> avoid.
-        if path_like_ids:
-            path_like_mask = np.isin(ade, path_like_ids).astype(np.uint8)
-            road_like_mask = np.isin(ade, road_ids).astype(np.uint8)
-
-            path_like_d = cv2.dilate(path_like_mask, kernel, iterations=1)
-            road_like_d = cv2.dilate(road_like_mask, kernel, iterations=1)
-            boundary_1 = cv2.bitwise_and(path_like_d, road_like_d)
-            lbl[boundary_1 > 0] = np.uint8(int(avoid_id))
-
-        # 2) Merge road-like ADE into path.
-        lbl[np.isin(ade, road_ids)] = np.uint8(int(path_id))
-
-        return lbl
 
     @staticmethod
     def _format_target_report(
@@ -276,8 +251,12 @@ class GeneratorPipeline:
         specs: Sequence[ViewSpec],
         cfg: ExtractConfig,
         cm: ClassMap,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[Dict[str, str]], List[str]]:
         if not specs:
+            return [], [], [], [], []
+
+        if should_stop is not None and should_stop():
             return [], [], [], [], []
 
         rgb_outs = [td_path / f"{spec.name}.png" for spec in specs]
@@ -289,41 +268,26 @@ class GeneratorPipeline:
         reports: List[Dict[str, str]] = []
         names: List[str] = []
 
-        unlabeled_id = self._dataset_id_by_name(cm, "unlabeled", default=5)
-        avoid_id = self._dataset_id_by_name(cm, "avoid", default=1)
-        path_id = self._dataset_id_by_name(cm, "path", default=2)
         id2label = self.engine.id2label
         for spec, rgb_p in zip(specs, rgb_outs):
+            if should_stop is not None and should_stop():
+                break
             rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
             ade = self.engine.predict_ade_ids(rgb)
             lbl = self._remap_ade_to_dataset_ids(ade, cm)
-            lbl = self._postprocess_road_sidewalk_boundary(ade=ade, lbl=lbl, cm=cm)
-            reports.append({
-                "unlabeled": self._format_target_report(
+            report_by_class: Dict[str, str] = {}
+            for class_id, class_name in sorted(cm.id_to_name.items()):
+                report_by_class[str(class_id)] = self._format_target_report(
                     ade=ade,
                     lbl=lbl,
                     id2label=id2label,
-                    target_id=unlabeled_id,
-                    target_name="unlabeled",
-                ),
-                "avoid": self._format_target_report(
-                    ade=ade,
-                    lbl=lbl,
-                    id2label=id2label,
-                    target_id=avoid_id,
-                    target_name="avoid",
-                ),
-                "path": self._format_target_report(
-                    ade=ade,
-                    lbl=lbl,
-                    id2label=id2label,
-                    target_id=path_id,
-                    target_name="path",
-                ),
-            })
+                    target_id=class_id,
+                    target_name=f"{class_id}: {class_name}",
+                )
+            reports.append(report_by_class)
             rgbs.append(rgb)
             labels.append(lbl)
-            segs.append(overlay_segmentation(rgb, lbl))
+            segs.append(overlay_segmentation(rgb, lbl, palette_by_class=self.palette_by_class))
             names.append(spec.name)
         return rgbs, labels, segs, reports, names
 
@@ -383,9 +347,14 @@ class GeneratorPipeline:
         output_root: Path,
         cfg: ExtractConfig,
         include_spec_names: Optional[Sequence[str]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> None:
         cm = self._ensure_class_map()
-        writer = MMSegDatasetWriter(root=output_root)
+        writer = CocoDatasetWriter(
+            root=output_root,
+            category_names_by_dataset_id=cm.id_to_name,
+            ignore_id=cm.ignore_id,
+        )
         writer.ensure_dirs()
 
         rng = random.Random(writer.seed)
@@ -398,7 +367,12 @@ class GeneratorPipeline:
 
         self.logger.log(f"Generate from images: count={len(image_paths)} views={len(all_specs)}")
 
+        cancelled = False
         for src_idx, path in enumerate(image_paths):
+            if should_stop is not None and should_stop():
+                cancelled = True
+                break
+
             bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
             if bgr is None:
                 self.logger.log(f"skip unreadable image: {path}")
@@ -423,17 +397,27 @@ class GeneratorPipeline:
                     specs=all_specs,
                     cfg=cfg,
                     cm=cm,
+                    should_stop=should_stop,
                 )
 
                 for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
+                    if should_stop is not None and should_stop():
+                        cancelled = True
+                        break
                     filename = f"{base}_{src_idx:06d}_{spec.name}.png"
-                    writer.save_image(split, filename, rgb)
-                    writer.save_label(split, filename, lbl)
+                    writer.add_sample(split, filename, rgb, lbl)
+
+            if cancelled:
+                break
 
             if (src_idx + 1) % 5 == 0:
                 self.logger.log(f"processed {src_idx+1}/{len(image_paths)}")
 
-        self.logger.log("done")
+        writer.save_annotations()
+        if cancelled:
+            self.logger.log("cancelled")
+        else:
+            self.logger.log("done")
 
     def generate_dataset_from_video(
         self,
@@ -443,9 +427,14 @@ class GeneratorPipeline:
         fps: float,
         cfg: ExtractConfig,
         include_spec_names: Optional[Sequence[str]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> None:
         cm = self._ensure_class_map()
-        writer = MMSegDatasetWriter(root=output_root)
+        writer = CocoDatasetWriter(
+            root=output_root,
+            category_names_by_dataset_id=cm.id_to_name,
+            ignore_id=cm.ignore_id,
+        )
         writer.ensure_dirs()
 
         rng = random.Random(writer.seed)
@@ -471,43 +460,60 @@ class GeneratorPipeline:
 
         self.logger.log(f"Generate from video: fps={fps} step={step_s:.3f}s views={len(all_specs)}")
 
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            t = frame_idx / src_fps
-            frame_idx += 1
-            if t + 1e-6 < next_t:
-                continue
-            next_t += step_s
+        cancelled = False
+        try:
+            while True:
+                if should_stop is not None and should_stop():
+                    cancelled = True
+                    break
 
-            # Choose split per source frame to avoid leakage across train/val.
-            split = writer.choose_split(rng.random())
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                t = frame_idx / src_fps
+                frame_idx += 1
+                if t + 1e-6 < next_t:
+                    continue
+                next_t += step_s
 
-            pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
-            pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
+                # Choose split per source frame to avoid leakage across train/val.
+                split = writer.choose_split(rng.random())
 
-            with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
-                td_path = Path(td)
-                pano_path = td_path / "pano.png"
-                Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
+                pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
+                pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
 
-                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
-                    td_path=td_path,
-                    pano_path=pano_path,
-                    specs=all_specs,
-                    cfg=cfg,
-                    cm=cm,
-                )
+                with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
+                    td_path = Path(td)
+                    pano_path = td_path / "pano.png"
+                    Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
 
-                for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
-                    filename = f"frame_{saved_idx:06d}_{spec.name}.png"
-                    writer.save_image(split, filename, rgb)
-                    writer.save_label(split, filename, lbl)
+                    rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
+                        td_path=td_path,
+                        pano_path=pano_path,
+                        specs=all_specs,
+                        cfg=cfg,
+                        cm=cm,
+                        should_stop=should_stop,
+                    )
 
-            saved_idx += 1
-            if saved_idx % 5 == 0:
-                self.logger.log(f"saved frames: {saved_idx}")
+                    for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
+                        if should_stop is not None and should_stop():
+                            cancelled = True
+                            break
+                        filename = f"frame_{saved_idx:06d}_{spec.name}.png"
+                        writer.add_sample(split, filename, rgb, lbl)
 
-        cap.release()
-        self.logger.log("done")
+                if cancelled:
+                    break
+
+                saved_idx += 1
+                if saved_idx % 5 == 0:
+                    self.logger.log(f"saved frames: {saved_idx}")
+        finally:
+            cap.release()
+
+        writer.save_annotations()
+        if cancelled:
+            self.logger.log("cancelled")
+        else:
+            self.logger.log("done")

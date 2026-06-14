@@ -15,10 +15,10 @@ from PIL import Image, ImageTk
 import yaml
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from src.pipeline import ExtractConfig, GeneratorPipeline, PreviewResult, overlay_segmentation, resize_equirect_for_speed
-from src.segmentation.palette import default_palette_8
+from src.segmentation.palette import default_palette
 from src.utils.logging import Logger
 
 
@@ -96,16 +96,22 @@ class AppGUI:
 
         self.var_fov = tk.StringVar(value="90")
         self.var_out_size = tk.StringVar(value="512")
+        self.var_up_pitch_deg = tk.StringVar(value="45")
+        self.var_down_pitch_deg = tk.StringVar(value="-45")
 
         self.var_up_4 = tk.BooleanVar(value=False)
-        self.var_up_6 = tk.BooleanVar(value=True)
-        self.var_top = tk.BooleanVar(value=True)
-        self.var_h_4 = tk.BooleanVar(value=False)
-        self.var_h_6 = tk.BooleanVar(value=True)
+        self.var_up_6 = tk.BooleanVar(value=False)
+        self.var_top = tk.BooleanVar(value=False)
+        self.var_h_4 = tk.BooleanVar(value=True)
+        self.var_h_6 = tk.BooleanVar(value=False)
         self.var_down_4 = tk.BooleanVar(value=False)
-        self.var_down_6 = tk.BooleanVar(value=True)
+        self.var_down_6 = tk.BooleanVar(value=False)
 
         self.var_show_seg = tk.BooleanVar(value=False)
+
+        self.class_color_overrides: Dict[int, Tuple[int, int, int]] = {}
+        self._run_stop_event = threading.Event()
+        self._run_thread: Optional[threading.Thread] = None
 
         # Image-folder preview navigation
         self._image_files: List[Path] = []
@@ -125,20 +131,25 @@ class AppGUI:
         self._preview2_auto_after_id: Optional[str] = None
 
         self.var_preview2_report = tk.StringVar(value="")
-        self.var_preview2_report_kind = tk.StringVar(value="unlabeled")
+        self.var_preview2_report_kind = tk.StringVar(value="")
+        self._preview2_report_keys: List[str] = []
         self._preview2_active_tile: Optional[Tile] = None
 
         self._load_persisted_paths()
 
         self._build_layout()
 
+        self._bind_persistence_traces()
+
         self.logger = Logger(sink=self._append_log)
         self.pipeline = GeneratorPipeline(logger=self.logger)
+        self.pipeline.set_palette_overrides(self._effective_palette_by_class())
 
         self._build_legend()
         self._clear_preview2()
 
         self._refresh_input_state()
+        self._persist_paths()
 
     def _build_layout(self) -> None:
         self.root.geometry("1300x900")
@@ -261,10 +272,17 @@ class AppGUI:
         self.ent_fps = ttk.Entry(r_fps, textvariable=self.var_fps, width=10)
         self.ent_fps.pack(side="left", padx=(6, 0))
 
+        r_pitch = ttk.Frame(frm_set)
+        r_pitch.pack(fill="x", padx=8, pady=4)
+        ttk.Label(r_pitch, text="上方向角度(度)").pack(side="left")
+        ttk.Entry(r_pitch, textvariable=self.var_up_pitch_deg, width=8).pack(side="left", padx=(6, 12))
+        ttk.Label(r_pitch, text="下方向角度(度)").pack(side="left")
+        ttk.Entry(r_pitch, textvariable=self.var_down_pitch_deg, width=8).pack(side="left", padx=(6, 0))
+
         grid = ttk.Frame(frm_set)
         grid.pack(fill="x", padx=8, pady=6)
 
-        ttk.Label(grid, text="上方向(上45°)").grid(row=0, column=0, sticky="w")
+        ttk.Label(grid, text="上方向").grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(grid, text="4分割", variable=self.var_up_4).grid(row=0, column=1, sticky="w")
         ttk.Checkbutton(grid, text="6分割", variable=self.var_up_6).grid(row=0, column=2, sticky="w")
         ttk.Checkbutton(grid, text="真上", variable=self.var_top).grid(row=0, column=3, sticky="w")
@@ -273,7 +291,7 @@ class AppGUI:
         ttk.Checkbutton(grid, text="4分割", variable=self.var_h_4).grid(row=1, column=1, sticky="w")
         ttk.Checkbutton(grid, text="6分割", variable=self.var_h_6).grid(row=1, column=2, sticky="w")
 
-        ttk.Label(grid, text="下方向(下45°)").grid(row=2, column=0, sticky="w")
+        ttk.Label(grid, text="下方向").grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(grid, text="4分割", variable=self.var_down_4).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(grid, text="6分割", variable=self.var_down_6).grid(row=2, column=2, sticky="w")
 
@@ -340,15 +358,9 @@ class AppGUI:
             rowp2, text="セグメンテーション表示", variable=self.var_show_seg, command=self._on_toggle_show_seg
         ).pack(side="left", padx=(14, 0))
         ttk.Label(rowp2, text="内訳表示:").pack(side="left", padx=(14, 4))
-        cmb = ttk.Combobox(
-            rowp2,
-            textvariable=self.var_preview2_report_kind,
-            values=("unlabeled", "avoid", "path"),
-            width=12,
-            state="readonly",
-        )
-        cmb.pack(side="left")
-        cmb.bind("<<ComboboxSelected>>", lambda _e: self._refresh_preview2_report_for_active_tile())
+        self.cmb_preview2_report = ttk.Combobox(rowp2, textvariable=self.var_preview2_report_kind, width=18, state="readonly")
+        self.cmb_preview2_report.pack(side="left")
+        self.cmb_preview2_report.bind("<<ComboboxSelected>>", lambda _e: self._refresh_preview2_report_for_active_tile())
 
         self.lbl_preview2_report = ttk.Label(
             frm_p2,
@@ -371,7 +383,10 @@ class AppGUI:
 
         frm_run = ttk.Frame(main)
         frm_run.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Button(frm_run, text="実行", command=self._on_run).pack(side="left")
+        self.btn_run = ttk.Button(frm_run, text="実行", command=self._on_run)
+        self.btn_run.pack(side="left")
+        self.btn_cancel_run = ttk.Button(frm_run, text="中断", command=self._on_cancel_run, state="disabled")
+        self.btn_cancel_run.pack(side="left", padx=(8, 0))
 
         frm_log = ttk.LabelFrame(main, text="ログ")
         frm_log.pack(fill="both", expand=False, padx=10, pady=(0, 10))
@@ -379,8 +394,8 @@ class AppGUI:
         self.txt_log.pack(fill="both", expand=True, padx=8, pady=6)
 
     def _read_class_names_from_yaml(self) -> Dict[int, str]:
-        """Return {dataset_id: name} from config/class_map.yaml (no model load)."""
-        path = Path(__file__).resolve().parent.parent / "config" / "class_map.yaml"
+        """Return {dataset_id: name} from config/new_class_map.yaml (no model load)."""
+        path = Path(__file__).resolve().parent.parent / "config" / "new_class_map.yaml"
         try:
             raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         except Exception:
@@ -395,12 +410,86 @@ class AppGUI:
                         did = int(k)
                     except Exception:
                         continue
-                    if not (0 <= did <= 7):
+                    if not (0 <= did <= 254):
                         continue
                     if not isinstance(spec, dict):
                         continue
                     out[did] = str(spec.get("name", f"class{did}"))
         return dict(sorted(out.items(), key=lambda kv: kv[0]))
+
+    def _bind_persistence_traces(self) -> None:
+        watched_vars = [
+            self.var_input_type,
+            self.var_video_path,
+            self.var_images_dir,
+            self.var_output_dir,
+            self.var_fps,
+            self.var_preview_time,
+            self.var_yaw_offset,
+            self.var_fov,
+            self.var_out_size,
+            self.var_up_pitch_deg,
+            self.var_down_pitch_deg,
+            self.var_up_4,
+            self.var_up_6,
+            self.var_top,
+            self.var_h_4,
+            self.var_h_6,
+            self.var_down_4,
+            self.var_down_6,
+            self.var_show_seg,
+        ]
+
+        for var in watched_vars:
+            var.trace_add("write", lambda *_args: self._persist_paths())
+
+    @staticmethod
+    def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
+        r, g, b = [max(0, min(255, int(x))) for x in rgb]
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    @staticmethod
+    def _hex_to_rgb(color_hex: str) -> Optional[Tuple[int, int, int]]:
+        s = str(color_hex).strip()
+        if len(s) == 7 and s.startswith("#"):
+            try:
+                return (int(s[1:3], 16), int(s[3:5], 16), int(s[5:7], 16))
+            except Exception:
+                return None
+        return None
+
+    def _effective_palette_by_class(self) -> Dict[int, Tuple[int, int, int]]:
+        class_names = self._read_class_names_from_yaml()
+        max_class_id = max(class_names.keys(), default=0)
+        if self.class_color_overrides:
+            max_class_id = max(max_class_id, max(self.class_color_overrides.keys()))
+
+        base = default_palette(max_class_id + 1)
+        palette = {i: base[i] for i in range(len(base))}
+        for cls_id, rgb in self.class_color_overrides.items():
+            if 0 <= int(cls_id) <= 254:
+                palette[int(cls_id)] = (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+        return palette
+
+    def _on_pick_legend_color(self, cls_id: int) -> None:
+        palette = self._effective_palette_by_class()
+        cur = palette.get(int(cls_id), (255, 255, 255))
+        initial = self._rgb_to_hex(cur)
+        picked = colorchooser.askcolor(color=initial, title=f"クラス {cls_id} の色を選択")
+        if not picked or picked[0] is None:
+            return
+
+        rr, gg, bb = picked[0]
+        self.class_color_overrides[int(cls_id)] = (int(round(rr)), int(round(gg)), int(round(bb)))
+        self.pipeline.set_palette_overrides(self._effective_palette_by_class())
+        self._persist_paths()
+        self._build_legend()
+
+        if self.var_show_seg.get() and self.preview1_rgb is not None:
+            self._start_preview1_segmentation(self.preview1_rgb)
+
+        if self.tiles_up or self.tiles_mid or self.tiles_down:
+            self._on_preview2()
 
     def _build_legend(self) -> None:
         """Populate legend frame with class name + color swatch."""
@@ -411,8 +500,15 @@ class AppGUI:
         for child in frm.winfo_children():
             child.destroy()
 
-        palette = default_palette_8()
         names = self._read_class_names_from_yaml()
+        palette = self._effective_palette_by_class()
+
+        choices = [f"{class_id}: {names[class_id]}" for class_id in sorted(names.keys())]
+        self._preview2_report_keys = [str(class_id) for class_id in sorted(names.keys())]
+        if hasattr(self, "cmb_preview2_report"):
+            self.cmb_preview2_report.configure(values=choices)
+        if choices and self.var_preview2_report_kind.get() not in choices:
+            self.var_preview2_report_kind.set(choices[0])
 
         grid = ttk.Frame(frm)
         grid.pack(fill="x", padx=8, pady=6)
@@ -420,7 +516,7 @@ class AppGUI:
         # Show one class per row.
         cols = 1
         for i, (cls_id, cls_name) in enumerate(names.items()):
-            if not (0 <= cls_id < len(palette)):
+            if not (0 <= cls_id <= 254):
                 continue
 
             r = i // cols
@@ -429,14 +525,18 @@ class AppGUI:
             item = ttk.Frame(grid)
             item.grid(row=r, column=c, sticky="w", padx=(0, 16), pady=2)
 
-            rr, gg, bb = palette[cls_id]
-            color_hex = f"#{rr:02x}{gg:02x}{bb:02x}"
+            rr, gg, bb = palette.get(int(cls_id), (255, 255, 255))
+            color_hex = self._rgb_to_hex((rr, gg, bb))
             sw = tk.Canvas(item, width=16, height=16, highlightthickness=0)
             # Outline helps when fill is black.
             sw.create_rectangle(1, 1, 15, 15, fill=color_hex, outline="#ffffff")
             sw.pack(side="left")
+            sw.bind("<Button-1>", lambda _e, cid=cls_id: self._on_pick_legend_color(cid))
 
             ttk.Label(item, text=f"{cls_id}: {cls_name}").pack(side="left", padx=(6, 0))
+            ttk.Button(item, text="色", width=4, command=lambda cid=cls_id: self._on_pick_legend_color(cid)).pack(
+                side="left", padx=(6, 0)
+            )
 
     def _on_toggle_show_seg(self) -> None:
         if self.var_show_seg.get() and self.preview1_rgb is not None and self.preview1_seg_rgb is None:
@@ -464,7 +564,7 @@ class AppGUI:
                         continue
                     lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
 
-                seg_rgb = overlay_segmentation(pano_rgb, lbl)
+                seg_rgb = overlay_segmentation(pano_rgb, lbl, palette_by_class=self.pipeline.palette_by_class)
             except Exception as e:
                 self.logger.log(f"preview1 segmentation failed: {e}")
                 return
@@ -663,13 +763,54 @@ class AppGUI:
         if isinstance(raw.get("output_dir"), str):
             self.var_output_dir.set(raw["output_dir"])
 
+        raw_colors = raw.get("class_colors")
+        if isinstance(raw_colors, dict):
+            for k, v in raw_colors.items():
+                try:
+                    cls_id = int(k)
+                except Exception:
+                    continue
+                if not (0 <= cls_id <= 254):
+                    continue
+                rgb: Optional[Tuple[int, int, int]] = None
+                if isinstance(v, str):
+                    rgb = self._hex_to_rgb(v)
+                elif isinstance(v, (list, tuple)) and len(v) == 3:
+                    try:
+                        rgb = (int(v[0]), int(v[1]), int(v[2]))
+                    except Exception:
+                        rgb = None
+                if rgb is not None:
+                    self.class_color_overrides[cls_id] = rgb
+
     def _persist_paths(self) -> None:
         path = self._state_file_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
+            "input_type": self.var_input_type.get().strip(),
             "video_path": self.var_video_path.get().strip(),
             "images_dir": self.var_images_dir.get().strip(),
             "output_dir": self.var_output_dir.get().strip(),
+            "fps": self.var_fps.get().strip(),
+            "preview_time": self.var_preview_time.get().strip(),
+            "yaw_offset": float(self.var_yaw_offset.get()),
+            "fov": self.var_fov.get().strip(),
+            "out_size": self.var_out_size.get().strip(),
+            "up_pitch_deg": self.var_up_pitch_deg.get().strip(),
+            "down_pitch_deg": self.var_down_pitch_deg.get().strip(),
+            "up_4": bool(self.var_up_4.get()),
+            "up_6": bool(self.var_up_6.get()),
+            "top": bool(self.var_top.get()),
+            "h_4": bool(self.var_h_4.get()),
+            "h_6": bool(self.var_h_6.get()),
+            "down_4": bool(self.var_down_4.get()),
+            "down_6": bool(self.var_down_6.get()),
+            "show_seg": bool(self.var_show_seg.get()),
+            "preview2_enabled_specs": dict(sorted(self.preview2_enabled_specs.items(), key=lambda kv: kv[0])),
+            "class_colors": {
+                str(k): self._rgb_to_hex(v)
+                for k, v in sorted(self.class_color_overrides.items(), key=lambda kv: int(kv[0]))
+            },
         }
         try:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -692,10 +833,26 @@ class AppGUI:
         if out_size < 128:
             raise ValueError("out size must be >= 128")
 
+        try:
+            up_pitch_deg = float(self.var_up_pitch_deg.get())
+        except Exception:
+            raise ValueError("上方向角度は数値で入力してください")
+        if not (0.0 <= up_pitch_deg <= 90.0):
+            raise ValueError("上方向角度は0..90で指定してください")
+
+        try:
+            down_pitch_deg = float(self.var_down_pitch_deg.get())
+        except Exception:
+            raise ValueError("下方向角度は数値で入力してください")
+        if not (-90.0 <= down_pitch_deg <= 0.0):
+            raise ValueError("下方向角度は-90..0で指定してください")
+
         cfg = ExtractConfig(
             fov=fov,
             out_size=out_size,
             yaw_offset=float(self.var_yaw_offset.get()),
+            up_pitch_deg=up_pitch_deg,
+            down_pitch_deg=down_pitch_deg,
             use_up_4=bool(self.var_up_4.get()),
             use_up_6=bool(self.var_up_6.get()),
             use_top=bool(self.var_top.get()),
@@ -750,6 +907,39 @@ class AppGUI:
 
         self._update_image_index_label()
 
+        if isinstance(raw.get("fps"), str):
+            self.var_fps.set(raw["fps"])
+        if isinstance(raw.get("preview_time"), str):
+            self.var_preview_time.set(raw["preview_time"])
+        if raw.get("yaw_offset") is not None:
+            try:
+                self.var_yaw_offset.set(float(raw["yaw_offset"]))
+            except Exception:
+                pass
+        if isinstance(raw.get("fov"), str):
+            self.var_fov.set(raw["fov"])
+        if isinstance(raw.get("out_size"), str):
+            self.var_out_size.set(raw["out_size"])
+        if isinstance(raw.get("up_pitch_deg"), str):
+            self.var_up_pitch_deg.set(raw["up_pitch_deg"])
+        if isinstance(raw.get("down_pitch_deg"), str):
+            self.var_down_pitch_deg.set(raw["down_pitch_deg"])
+        for key, var in (
+            ("up_4", self.var_up_4),
+            ("up_6", self.var_up_6),
+            ("top", self.var_top),
+            ("h_4", self.var_h_4),
+            ("h_6", self.var_h_6),
+            ("down_4", self.var_down_4),
+            ("down_6", self.var_down_6),
+            ("show_seg", self.var_show_seg),
+        ):
+            if raw.get(key) is not None:
+                var.set(bool(raw.get(key)))
+
+        raw_preview2 = raw.get("preview2_enabled_specs")
+        if isinstance(raw_preview2, dict):
+            self.preview2_enabled_specs = {str(k): bool(v) for k, v in raw_preview2.items()}
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
             raise ValueError("画像の読み込みに失敗しました")
@@ -839,13 +1029,26 @@ class AppGUI:
             return
         self._on_preview2_tile_click(self._preview2_active_tile)
 
+    def _selected_preview2_report_key(self) -> str:
+        raw = (self.var_preview2_report_kind.get() or "").strip()
+        if raw in self._preview2_report_keys:
+            return raw
+        if raw and ":" in raw:
+            maybe_key = raw.split(":", 1)[0].strip()
+            if maybe_key in self._preview2_report_keys:
+                return maybe_key
+        return self._preview2_report_keys[0] if self._preview2_report_keys else raw
+
     def _on_preview2_tile_click(self, tile: Tile) -> None:
         self._preview2_active_tile = tile
-        key = (self.var_preview2_report_kind.get() or "unlabeled").strip().lower()
         reports = tile.reports_by_class or {}
+        key = self._selected_preview2_report_key()
+        if not key and reports:
+            key = next(iter(reports.keys()))
+            self.var_preview2_report_kind.set(key)
         txt = str(reports.get(key, "")).strip()
         if not txt:
-            txt = f"{key}内訳: (空)"
+            txt = "内訳: (空)"
         self.var_preview2_report.set(txt)
 
     def _set_tiles(
@@ -879,6 +1082,7 @@ class AppGUI:
 
             def _on_sel_change(name: str = spec_name, v: tk.BooleanVar = var_sel) -> None:
                 self.preview2_enabled_specs[name] = bool(v.get())
+                self._persist_paths()
 
             ttk.Checkbutton(item, text=spec_name, variable=var_sel, command=_on_sel_change).pack(anchor="w")
 
@@ -995,7 +1199,25 @@ class AppGUI:
         selected = [name for name in all_names if bool(self.preview2_enabled_specs.get(name, True))]
         return selected
 
+    def _set_run_state(self, running: bool) -> None:
+        if running:
+            self.btn_run.configure(state="disabled")
+            self.btn_cancel_run.configure(state="normal")
+        else:
+            self.btn_run.configure(state="normal")
+            self.btn_cancel_run.configure(state="disabled")
+
+    def _on_cancel_run(self) -> None:
+        if self._run_thread is None or not self._run_thread.is_alive():
+            return
+        self._run_stop_event.set()
+        self._append_log("[info] cancel requested...")
+
     def _on_run(self) -> None:
+        if self._run_thread is not None and self._run_thread.is_alive():
+            messagebox.showinfo("実行中", "現在の処理が完了するまでお待ちください。中断する場合は「中断」を押してください。")
+            return
+
         try:
             cfg = self._parse_cfg()
         except Exception as e:
@@ -1008,6 +1230,9 @@ class AppGUI:
             return
         out_dir = Path(out_dir_str)
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        self._run_stop_event.clear()
+        self._set_run_state(True)
 
         self._persist_paths()
 
@@ -1035,6 +1260,7 @@ class AppGUI:
                         fps=fps,
                         cfg=cfg,
                         include_spec_names=selected_names,
+                        should_stop=lambda: self._run_stop_event.is_set(),
                     )
                 else:
                     folder_str = self.var_images_dir.get().strip()
@@ -1058,10 +1284,16 @@ class AppGUI:
                         output_root=out_dir,
                         cfg=cfg,
                         include_spec_names=selected_names,
+                        should_stop=lambda: self._run_stop_event.is_set(),
                     )
 
             except Exception as e:
                 self.logger.log(f"run failed: {e}")
-                return
+            finally:
+                def _finish() -> None:
+                    self._set_run_state(False)
 
-        threading.Thread(target=worker, daemon=True).start()
+                self.root.after(0, _finish)
+
+        self._run_thread = threading.Thread(target=worker, daemon=True)
+        self._run_thread.start()

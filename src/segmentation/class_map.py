@@ -9,12 +9,7 @@ import yaml
 
 @dataclass(frozen=True)
 class ClassMap:
-    """Maps ADE20K label names/ids into compact dataset ids (0..7) + ignore (255).
-
-    Output labels are uint8 values:
-      - 0..7 : trainable classes
-      - 255  : ignore
-    """
+    """Maps ADE20K labels into dataset ids (0..254) + ignore (255)."""
 
     id_to_name: Dict[int, str]
     ade_name_to_id: Dict[str, int]
@@ -48,8 +43,8 @@ class ClassMap:
 
         for dataset_id_raw, spec in classes.items():
             dataset_id = int(dataset_id_raw)
-            if dataset_id < 0 or dataset_id > 7:
-                raise ValueError("dataset class ids must be in 0..7")
+            if dataset_id < 0 or dataset_id > 254:
+                raise ValueError("dataset class ids must be in 0..254")
             if not isinstance(spec, dict):
                 raise ValueError(f"classes[{dataset_id}] must be a mapping")
 
@@ -68,8 +63,8 @@ class ClassMap:
                 ade_id_to_dataset_id[ade_id] = dataset_id
 
         unmapped = int(raw.get("unmapped", 255))
-        if unmapped not in (*range(0, 8), 255):
-            raise ValueError("unmapped must be 0..7 (a dataset class id) or 255 (ignore)")
+        if not ((0 <= unmapped <= 254) or unmapped == 255):
+            raise ValueError("unmapped must be 0..254 (a dataset class id) or 255 (ignore)")
 
         # Store unmapped policy as a pseudo entry using key -1.
         ade_id_to_dataset_id[-1] = unmapped

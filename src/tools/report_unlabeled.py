@@ -19,23 +19,22 @@ def _topk(items: Dict[int, int], k: int) -> List[Tuple[int, int]]:
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=(
-            "Report which ADE20K labels end up as dataset unlabeled(=5 by default).\n"
-            "Useful to decide what to add to config/class_map.yaml."
+            "Report which ADE20K labels end up as dataset unlabeled.\n"
+            "Useful to decide what to add to config/new_class_map.yaml."
         )
     )
     ap.add_argument("image", type=Path, help="Path to an RGB image (e.g. a generated tile in img_dir/*/*.png)")
     ap.add_argument(
         "--class-map",
         type=Path,
-        default=Path(__file__).resolve().parents[2] / "config" / "class_map.yaml",
-        help="Path to class_map.yaml",
+        default=Path(__file__).resolve().parents[2] / "config" / "new_class_map.yaml",
+        help="Path to class map yaml",
     )
-    ap.add_argument("--kernel", type=int, default=10, help="Boundary kernel size (same meaning as pipeline)")
     ap.add_argument(
         "--unlabeled-id",
         type=int,
-        default=5,
-        help="Dataset id considered 'unlabeled' (default: 5, matches current config)",
+        default=13,
+        help="Dataset id considered 'unlabeled' (default: 13, matches new default config)",
     )
     ap.add_argument("--topk", type=int, default=20, help="Show top-K ADE labels within unlabeled pixels")
 
@@ -55,7 +54,6 @@ def main() -> int:
     ade = engine.predict_ade_ids(rgb)
 
     lbl = GeneratorPipeline._remap_ade_to_dataset_ids(ade, cm)
-    lbl = GeneratorPipeline._postprocess_road_sidewalk_boundary(ade=ade, lbl=lbl, cm=cm, kernel_size=int(args.kernel))
 
     unlabeled_id = int(args.unlabeled_id)
     unlabeled_mask = lbl == np.uint8(unlabeled_id)
