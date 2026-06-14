@@ -9,6 +9,19 @@ import cv2
 import numpy as np
 from PIL import Image
 
+try:
+    from shapely import coverage_simplify
+    from shapely.ops import unary_union
+    from shapely.geometry import MultiPolygon, Polygon
+
+    _HAS_SHAPELY = True
+except Exception:
+    coverage_simplify = None
+    unary_union = None
+    MultiPolygon = None
+    Polygon = None
+    _HAS_SHAPELY = False
+
 
 @dataclass(frozen=True)
 class MMSegDatasetWriter:
@@ -68,56 +81,156 @@ class CocoDatasetWriter:
         Image.fromarray(rgb_u8, mode="RGB").save(out)
         return out
 
-    def _build_shapes_for_label(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
-        out: List[Dict[str, object]] = []
-        occupied = np.zeros(label_u8.shape, dtype=np.uint8)
-        class_order = sorted(
-            self._cat_id_by_dataset_id.keys(),
-            key=lambda class_id: int((label_u8 == np.uint8(class_id)).sum()),
-        )
+    def _shape_obj(self, dataset_id: int, points: List[List[float]]) -> Dict[str, object]:
+        return {
+            "kie_linking": [],
+            "label": str(self.category_names_by_dataset_id.get(dataset_id, f"class_{dataset_id}")),
+            "score": None,
+            "points": points,
+            "group_id": None,
+            "description": "",
+            "difficult": False,
+            "shape_type": "polygon",
+            "flags": {},
+            "attributes": {},
+        }
 
-        for dataset_id in class_order:
+    def _build_shapes_with_opencv(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
+        out: List[Dict[str, object]] = []
+        eps = max(0.0, float(self.simplify_epsilon_px))
+
+        for dataset_id in sorted(self._cat_id_by_dataset_id.keys()):
             cls_mask = (label_u8 == np.uint8(dataset_id)).astype(np.uint8)
-            cls_mask = cv2.bitwise_and(cls_mask, cv2.bitwise_not(occupied))
-            if cls_mask.max() == 0:
+            if int(np.count_nonzero(cls_mask)) == 0:
                 continue
 
-            contours, _ = cv2.findContours(cls_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(cls_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
             for cnt in contours:
                 if cnt is None or len(cnt) < 3:
                     continue
-
-                area = float(cv2.contourArea(cnt))
-                if area <= 0.0:
-                    continue
-
-                x, y, bw, bh = cv2.boundingRect(cnt)
-                peri = float(cv2.arcLength(cnt, True))
-                eps = max(0.0, float(self.simplify_epsilon_px))
-                if eps > 0.0 and peri > 0.0:
+                raw_cnt = cnt
+                if eps > 0.0:
                     cnt = cv2.approxPolyDP(cnt, epsilon=eps, closed=True)
-
-                pts = cnt.reshape(-1, 2)
-                if pts.shape[0] < 3:
+                if cnt is None or len(cnt) < 3:
+                    cnt = raw_cnt
+                if cnt is None or len(cnt) < 3:
                     continue
 
-                points = [[float(p[0]), float(p[1])] for p in pts.tolist()]
-                out.append(
-                    {
-                        "kie_linking": [],
-                        "label": str(self.category_names_by_dataset_id.get(dataset_id, f"class_{dataset_id}")),
-                        "score": None,
-                        "points": points,
-                        "group_id": None,
-                        "description": "",
-                        "difficult": False,
-                        "shape_type": "polygon",
-                        "flags": {},
-                        "attributes": {},
-                    }
-                )
-            occupied = cv2.bitwise_or(occupied, cls_mask)
+                points: List[List[float]] = []
+                for p in cnt[:, 0, :].tolist():
+                    x, y = int(p[0]), int(p[1])
+                    points.append([float(x), float(y)])
+                if len(points) < 3:
+                    continue
+                out.append(self._shape_obj(dataset_id, points))
+
         return out
+
+    @staticmethod
+    def _row_runs(mask_row: np.ndarray) -> List[tuple[int, int]]:
+        runs: List[tuple[int, int]] = []
+        start = -1
+        for x, v in enumerate(mask_row.tolist()):
+            on = bool(v)
+            if on and start < 0:
+                start = x
+            elif not on and start >= 0:
+                runs.append((start, x - 1))
+                start = -1
+        if start >= 0:
+            runs.append((start, int(mask_row.shape[0]) - 1))
+        return runs
+
+    def _rect_decompose_mask(self, mask_u8: np.ndarray) -> List[tuple[int, int, int, int]]:
+        h, _w = mask_u8.shape[:2]
+        active: Dict[tuple[int, int], List[int]] = {}
+        out: List[tuple[int, int, int, int]] = []
+
+        for y in range(h):
+            runs = self._row_runs(mask_u8[y])
+            run_set = set(runs)
+
+            for key in list(active.keys()):
+                if key not in run_set:
+                    x0, x1, y0, y1 = active.pop(key)
+                    out.append((x0, y0, x1 + 1, y1 + 1))
+
+            for run in runs:
+                if run in active:
+                    active[run][3] = y
+                else:
+                    x0, x1 = run
+                    active[run] = [x0, x1, y, y]
+
+        for x0, x1, y0, y1 in active.values():
+            out.append((x0, y0, x1 + 1, y1 + 1))
+
+        return out
+
+    def _build_shapes_with_shared_topology(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
+        if not _HAS_SHAPELY:
+            return self._build_shapes_with_opencv(label_u8)
+
+        labeled_geoms: List[tuple[int, object]] = []
+        for dataset_id in sorted(self._cat_id_by_dataset_id.keys()):
+            cls_mask = (label_u8 == np.uint8(dataset_id)).astype(np.uint8)
+            if int(np.count_nonzero(cls_mask)) == 0:
+                continue
+
+            rects = self._rect_decompose_mask(cls_mask)
+            if not rects:
+                continue
+            boxes = [Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]) for x0, y0, x1, y1 in rects]
+            geom = unary_union(boxes)
+            if geom is None or geom.is_empty:
+                continue
+            if not geom.is_valid:
+                geom = geom.buffer(0)
+                if geom.is_empty:
+                    continue
+
+            if isinstance(geom, MultiPolygon):
+                for g in geom.geoms:
+                    if not g.is_empty and g.area > 0:
+                        labeled_geoms.append((dataset_id, g))
+            else:
+                if geom.area > 0:
+                    labeled_geoms.append((dataset_id, geom))
+
+        if not labeled_geoms:
+            return []
+
+        ids = [x[0] for x in labeled_geoms]
+        geoms = [x[1] for x in labeled_geoms]
+        eps = max(0.0, float(self.simplify_epsilon_px))
+        if eps > 0.0:
+            geoms = list(coverage_simplify(geoms, eps))
+
+        out: List[Dict[str, object]] = []
+        for dataset_id, geom in zip(ids, geoms):
+            if geom is None or geom.is_empty:
+                continue
+            if isinstance(geom, MultiPolygon):
+                poly_iter = list(geom.geoms)
+            else:
+                poly_iter = [geom]
+
+            for poly in poly_iter:
+                if poly.is_empty or poly.area <= 0:
+                    continue
+                coords = list(poly.exterior.coords)
+                if len(coords) < 4:
+                    continue
+                coords = coords[:-1]
+                if len(coords) < 3:
+                    continue
+                points = [[float(x), float(y)] for x, y in coords]
+                out.append(self._shape_obj(dataset_id, points))
+
+        return out
+
+    def _build_shapes_for_label(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
+        return self._build_shapes_with_shared_topology(label_u8)
 
     def add_sample(self, split: str, filename: str, rgb_u8: np.ndarray, label_u8: np.ndarray) -> None:
         if split not in ("train", "val"):
@@ -144,7 +257,10 @@ class CocoDatasetWriter:
         }
 
         json_path = out_path.with_suffix(".json")
-        json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
 
     def _categories(self) -> List[Dict[str, object]]:
         cats: List[Dict[str, object]] = []
