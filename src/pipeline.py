@@ -25,6 +25,7 @@ class ExtractConfig:
     yaw_offset: float  # slider value in [-180, 180]
     up_pitch_deg: float
     down_pitch_deg: float
+    seg_stride_px: int
 
     use_up_4: bool
     use_up_6: bool
@@ -243,6 +244,20 @@ class GeneratorPipeline:
             out[ade == int(ade_id)] = np.uint8(int(dataset_id))
         return out
 
+    def _predict_ade_ids_scaled(self, rgb_u8: np.ndarray, seg_stride_px: int) -> np.ndarray:
+        """Predict ADE ids at reduced resolution and restore to original size with nearest upsampling."""
+        h, w = rgb_u8.shape[:2]
+        stride = max(1, int(seg_stride_px))
+        if stride <= 1:
+            return self.engine.predict_ade_ids(rgb_u8)
+
+        h_s = max(1, int(round(h / float(stride))))
+        w_s = max(1, int(round(w / float(stride))))
+        small = cv2.resize(rgb_u8, (w_s, h_s), interpolation=cv2.INTER_AREA)
+        ade_small = self.engine.predict_ade_ids(small)
+        ade_full = cv2.resize(ade_small.astype(np.int32), (w, h), interpolation=cv2.INTER_NEAREST)
+        return ade_full.astype(np.int32)
+
     def _project_and_segment_group(
         self,
         *,
@@ -273,7 +288,7 @@ class GeneratorPipeline:
             if should_stop is not None and should_stop():
                 break
             rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
-            ade = self.engine.predict_ade_ids(rgb)
+            ade = self._predict_ade_ids_scaled(rgb, cfg.seg_stride_px)
             lbl = self._remap_ade_to_dataset_ids(ade, cm)
             report_by_class: Dict[str, str] = {}
             for class_id, class_name in sorted(cm.id_to_name.items()):
@@ -354,6 +369,7 @@ class GeneratorPipeline:
             root=output_root,
             category_names_by_dataset_id=cm.id_to_name,
             ignore_id=cm.ignore_id,
+            simplify_epsilon_px=max(0.0, 0.75 * float(max(1, cfg.seg_stride_px) - 1)),
         )
         writer.ensure_dirs()
 
@@ -434,6 +450,7 @@ class GeneratorPipeline:
             root=output_root,
             category_names_by_dataset_id=cm.id_to_name,
             ignore_id=cm.ignore_id,
+            simplify_epsilon_px=max(0.0, 0.75 * float(max(1, cfg.seg_stride_px) - 1)),
         )
         writer.ensure_dirs()
 

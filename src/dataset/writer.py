@@ -43,6 +43,7 @@ class CocoDatasetWriter:
     root: Path
     category_names_by_dataset_id: Dict[int, str]
     ignore_id: int = 255
+    simplify_epsilon_px: float = 0.0
     val_ratio: float = 0.2
     seed: int = 42
 
@@ -69,8 +70,15 @@ class CocoDatasetWriter:
 
     def _build_shapes_for_label(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
         out: List[Dict[str, object]] = []
-        for dataset_id in self._cat_id_by_dataset_id.keys():
+        occupied = np.zeros(label_u8.shape, dtype=np.uint8)
+        class_order = sorted(
+            self._cat_id_by_dataset_id.keys(),
+            key=lambda class_id: int((label_u8 == np.uint8(class_id)).sum()),
+        )
+
+        for dataset_id in class_order:
             cls_mask = (label_u8 == np.uint8(dataset_id)).astype(np.uint8)
+            cls_mask = cv2.bitwise_and(cls_mask, cv2.bitwise_not(occupied))
             if cls_mask.max() == 0:
                 continue
 
@@ -84,6 +92,11 @@ class CocoDatasetWriter:
                     continue
 
                 x, y, bw, bh = cv2.boundingRect(cnt)
+                peri = float(cv2.arcLength(cnt, True))
+                eps = max(0.0, float(self.simplify_epsilon_px))
+                if eps > 0.0 and peri > 0.0:
+                    cnt = cv2.approxPolyDP(cnt, epsilon=eps, closed=True)
+
                 pts = cnt.reshape(-1, 2)
                 if pts.shape[0] < 3:
                     continue
@@ -103,6 +116,7 @@ class CocoDatasetWriter:
                         "attributes": {},
                     }
                 )
+            occupied = cv2.bitwise_or(occupied, cls_mask)
         return out
 
     def add_sample(self, split: str, filename: str, rgb_u8: np.ndarray, label_u8: np.ndarray) -> None:

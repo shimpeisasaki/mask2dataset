@@ -98,6 +98,7 @@ class AppGUI:
         self.var_out_size = tk.StringVar(value="512")
         self.var_up_pitch_deg = tk.StringVar(value="45")
         self.var_down_pitch_deg = tk.StringVar(value="-45")
+        self.var_seg_stride_px = tk.StringVar(value="1")
 
         self.var_up_4 = tk.BooleanVar(value=False)
         self.var_up_6 = tk.BooleanVar(value=False)
@@ -279,6 +280,13 @@ class AppGUI:
         ttk.Label(r_pitch, text="下方向角度(度)").pack(side="left")
         ttk.Entry(r_pitch, textvariable=self.var_down_pitch_deg, width=8).pack(side="left", padx=(6, 0))
 
+        r_seg = ttk.Frame(frm_set)
+        r_seg.pack(fill="x", padx=8, pady=4)
+        ttk.Label(r_seg, text="推論粗さ(px)").pack(side="left")
+        ttk.Combobox(r_seg, textvariable=self.var_seg_stride_px, values=("1", "2", "4", "8"), width=8, state="readonly").pack(
+            side="left", padx=(6, 0)
+        )
+
         grid = ttk.Frame(frm_set)
         grid.pack(fill="x", padx=8, pady=6)
 
@@ -430,6 +438,7 @@ class AppGUI:
             self.var_out_size,
             self.var_up_pitch_deg,
             self.var_down_pitch_deg,
+            self.var_seg_stride_px,
             self.var_up_4,
             self.var_up_6,
             self.var_top,
@@ -556,7 +565,11 @@ class AppGUI:
                 self.pipeline.engine.ensure_loaded()
                 cm = self.pipeline._ensure_class_map()  # cache if already loaded
 
-                ade = self.pipeline.engine.predict_ade_ids(pano_rgb)
+                try:
+                    seg_stride_px = max(1, int(self.var_seg_stride_px.get()))
+                except Exception:
+                    seg_stride_px = 1
+                ade = self.pipeline._predict_ade_ids_scaled(pano_rgb, seg_stride_px)
                 unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
                 lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
                 for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
@@ -755,6 +768,22 @@ class AppGUI:
             return
         if not isinstance(raw, dict):
             return
+
+        def _as_bool(x: object, default: bool = False) -> bool:
+            if isinstance(x, bool):
+                return x
+            if isinstance(x, (int, float)):
+                return bool(x)
+            if isinstance(x, str):
+                v = x.strip().lower()
+                if v in ("1", "true", "yes", "on"):
+                    return True
+                if v in ("0", "false", "no", "off", ""):
+                    return False
+            return default
+
+        if isinstance(raw.get("input_type"), str):
+            self.var_input_type.set(raw["input_type"])
         if isinstance(raw.get("video_path"), str):
             self.var_video_path.set(raw["video_path"])
         if isinstance(raw.get("images_dir"), str):
@@ -762,6 +791,41 @@ class AppGUI:
             self._set_image_folder(Path(raw["images_dir"]), keep_index=False)
         if isinstance(raw.get("output_dir"), str):
             self.var_output_dir.set(raw["output_dir"])
+        if isinstance(raw.get("fps"), str):
+            self.var_fps.set(raw["fps"])
+        if isinstance(raw.get("preview_time"), str):
+            self.var_preview_time.set(raw["preview_time"])
+        if raw.get("yaw_offset") is not None:
+            try:
+                self.var_yaw_offset.set(float(raw["yaw_offset"]))
+            except Exception:
+                pass
+        if isinstance(raw.get("fov"), str):
+            self.var_fov.set(raw["fov"])
+        if isinstance(raw.get("out_size"), str):
+            self.var_out_size.set(raw["out_size"])
+        if isinstance(raw.get("up_pitch_deg"), str):
+            self.var_up_pitch_deg.set(raw["up_pitch_deg"])
+        if isinstance(raw.get("down_pitch_deg"), str):
+            self.var_down_pitch_deg.set(raw["down_pitch_deg"])
+        if isinstance(raw.get("seg_stride_px"), str):
+            self.var_seg_stride_px.set(raw["seg_stride_px"])
+        for key, var in (
+            ("up_4", self.var_up_4),
+            ("up_6", self.var_up_6),
+            ("top", self.var_top),
+            ("h_4", self.var_h_4),
+            ("h_6", self.var_h_6),
+            ("down_4", self.var_down_4),
+            ("down_6", self.var_down_6),
+            ("show_seg", self.var_show_seg),
+        ):
+            if key in raw:
+                var.set(_as_bool(raw.get(key), default=bool(var.get())))
+
+        raw_preview2 = raw.get("preview2_enabled_specs")
+        if isinstance(raw_preview2, dict):
+            self.preview2_enabled_specs = {str(k): _as_bool(v, default=True) for k, v in raw_preview2.items()}
 
         raw_colors = raw.get("class_colors")
         if isinstance(raw_colors, dict):
@@ -798,6 +862,7 @@ class AppGUI:
             "out_size": self.var_out_size.get().strip(),
             "up_pitch_deg": self.var_up_pitch_deg.get().strip(),
             "down_pitch_deg": self.var_down_pitch_deg.get().strip(),
+            "seg_stride_px": self.var_seg_stride_px.get().strip(),
             "up_4": bool(self.var_up_4.get()),
             "up_6": bool(self.var_up_6.get()),
             "top": bool(self.var_top.get()),
@@ -847,12 +912,20 @@ class AppGUI:
         if not (-90.0 <= down_pitch_deg <= 0.0):
             raise ValueError("下方向角度は-90..0で指定してください")
 
+        try:
+            seg_stride_px = int(self.var_seg_stride_px.get())
+        except Exception:
+            raise ValueError("推論粗さ(px)は整数で入力してください")
+        if seg_stride_px < 1:
+            raise ValueError("推論粗さ(px)は1以上にしてください")
+
         cfg = ExtractConfig(
             fov=fov,
             out_size=out_size,
             yaw_offset=float(self.var_yaw_offset.get()),
             up_pitch_deg=up_pitch_deg,
             down_pitch_deg=down_pitch_deg,
+            seg_stride_px=seg_stride_px,
             use_up_4=bool(self.var_up_4.get()),
             use_up_6=bool(self.var_up_6.get()),
             use_top=bool(self.var_top.get()),
@@ -906,40 +979,6 @@ class AppGUI:
             raise ValueError("画像フォルダに画像が見つかりません")
 
         self._update_image_index_label()
-
-        if isinstance(raw.get("fps"), str):
-            self.var_fps.set(raw["fps"])
-        if isinstance(raw.get("preview_time"), str):
-            self.var_preview_time.set(raw["preview_time"])
-        if raw.get("yaw_offset") is not None:
-            try:
-                self.var_yaw_offset.set(float(raw["yaw_offset"]))
-            except Exception:
-                pass
-        if isinstance(raw.get("fov"), str):
-            self.var_fov.set(raw["fov"])
-        if isinstance(raw.get("out_size"), str):
-            self.var_out_size.set(raw["out_size"])
-        if isinstance(raw.get("up_pitch_deg"), str):
-            self.var_up_pitch_deg.set(raw["up_pitch_deg"])
-        if isinstance(raw.get("down_pitch_deg"), str):
-            self.var_down_pitch_deg.set(raw["down_pitch_deg"])
-        for key, var in (
-            ("up_4", self.var_up_4),
-            ("up_6", self.var_up_6),
-            ("top", self.var_top),
-            ("h_4", self.var_h_4),
-            ("h_6", self.var_h_6),
-            ("down_4", self.var_down_4),
-            ("down_6", self.var_down_6),
-            ("show_seg", self.var_show_seg),
-        ):
-            if raw.get(key) is not None:
-                var.set(bool(raw.get(key)))
-
-        raw_preview2 = raw.get("preview2_enabled_specs")
-        if isinstance(raw_preview2, dict):
-            self.preview2_enabled_specs = {str(k): bool(v) for k, v in raw_preview2.items()}
         bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
         if bgr is None:
             raise ValueError("画像の読み込みに失敗しました")
