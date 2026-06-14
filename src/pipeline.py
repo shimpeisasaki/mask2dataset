@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+import os
 import random
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
-from PIL import Image
 
 from src.dataset.writer import CocoDatasetWriter
 from src.segmentation.class_map import ClassMap
@@ -152,9 +151,18 @@ class GeneratorPipeline:
         self.logger = logger or Logger()
         self.projector = V360Projector(ffmpeg=ffmpeg)
         self.engine = Mask2FormerADEEngine()
+        try:
+            infer_batch = int(os.environ.get("MASK2DATASET_INFER_BATCH", "4"))
+        except Exception:
+            infer_batch = 4
+        self.infer_batch_size = max(1, infer_batch)
+
+        polygon_backend = str(os.environ.get("MASK2DATASET_POLYGON_BACKEND", "fast")).strip().lower()
+        self.polygon_backend = polygon_backend if polygon_backend in ("fast", "topology") else "fast"
         self.class_map_path = Path(__file__).resolve().parent.parent / "config" / "new_class_map.yaml"
         self.palette_by_class: Dict[int, Tuple[int, int, int]] = {}
         self._class_map: Optional[ClassMap] = None
+        self._ade_to_dataset_lut: Optional[np.ndarray] = None
 
     def set_palette_overrides(self, palette_by_class: Dict[int, Tuple[int, int, int]]) -> None:
         self.palette_by_class = {
@@ -222,6 +230,7 @@ class GeneratorPipeline:
             raise FileNotFoundError(f"class map yaml not found: {path}")
         cm = ClassMap.from_yaml(path, id2label)
         self._class_map = cm
+        self._ade_to_dataset_lut = self._build_ade_to_dataset_lut(cm=cm, id2label=id2label)
         self.logger.log(f"Loaded class_map: {cm.summarize()}")
         return cm
 
@@ -235,13 +244,38 @@ class GeneratorPipeline:
         return self._class_map
 
     @staticmethod
-    def _remap_ade_to_dataset_ids(ade: np.ndarray, cm: ClassMap) -> np.ndarray:
-        unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-        out = np.full(ade.shape, int(unmapped), dtype=np.uint8)
+    def _build_ade_to_dataset_lut(cm: ClassMap, id2label: Dict[int, str]) -> np.ndarray:
+        max_ade = 0
+        if id2label:
+            max_ade = max(max_ade, max(int(k) for k in id2label.keys()))
+        for ade_id in cm.ade_id_to_dataset_id.keys():
+            if int(ade_id) >= 0:
+                max_ade = max(max_ade, int(ade_id))
+
+        unmapped = int(cm.ade_id_to_dataset_id.get(-1, 255))
+        lut = np.full((max_ade + 1,), unmapped, dtype=np.uint8)
         for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-            if ade_id < 0:
+            if int(ade_id) < 0:
                 continue
-            out[ade == int(ade_id)] = np.uint8(int(dataset_id))
+            if int(ade_id) < lut.shape[0]:
+                lut[int(ade_id)] = np.uint8(int(dataset_id))
+        return lut
+
+    @staticmethod
+    def _remap_ade_to_dataset_ids(ade: np.ndarray, cm: ClassMap, lut: Optional[np.ndarray] = None) -> np.ndarray:
+        unmapped = int(cm.ade_id_to_dataset_id.get(-1, 255))
+        if lut is None:
+            out = np.full(ade.shape, unmapped, dtype=np.uint8)
+            for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
+                if ade_id < 0:
+                    continue
+                out[ade == int(ade_id)] = np.uint8(int(dataset_id))
+            return out
+
+        out = np.full(ade.shape, unmapped, dtype=np.uint8)
+        valid = (ade >= 0) & (ade < int(lut.shape[0]))
+        if np.any(valid):
+            out[valid] = lut[ade[valid]]
         return out
 
     def _predict_ade_ids_scaled(self, rgb_u8: np.ndarray, seg_stride_px: int) -> np.ndarray:
@@ -258,14 +292,40 @@ class GeneratorPipeline:
         ade_full = cv2.resize(ade_small.astype(np.int32), (w, h), interpolation=cv2.INTER_NEAREST)
         return ade_full.astype(np.int32)
 
+    def _predict_ade_ids_scaled_batch(self, rgb_u8_list: Sequence[np.ndarray], seg_stride_px: int) -> List[np.ndarray]:
+        if not rgb_u8_list:
+            return []
+
+        stride = max(1, int(seg_stride_px))
+        if stride <= 1:
+            return self.engine.predict_ade_ids_batch(rgb_u8_list, batch_size=self.infer_batch_size)
+
+        resized: List[np.ndarray] = []
+        original_hw: List[Tuple[int, int]] = []
+        for rgb_u8 in rgb_u8_list:
+            h, w = rgb_u8.shape[:2]
+            original_hw.append((h, w))
+            h_s = max(1, int(round(h / float(stride))))
+            w_s = max(1, int(round(w / float(stride))))
+            small = cv2.resize(rgb_u8, (w_s, h_s), interpolation=cv2.INTER_AREA)
+            resized.append(small)
+
+        ade_small_list = self.engine.predict_ade_ids_batch(resized, batch_size=self.infer_batch_size)
+        out: List[np.ndarray] = []
+        for ade_small, (h, w) in zip(ade_small_list, original_hw):
+            ade_full = cv2.resize(ade_small.astype(np.int32), (w, h), interpolation=cv2.INTER_NEAREST)
+            out.append(ade_full.astype(np.int32))
+        return out
+
     def _project_and_segment_group(
         self,
         *,
-        td_path: Path,
-        pano_path: Path,
+        pano_rgb: np.ndarray,
         specs: Sequence[ViewSpec],
         cfg: ExtractConfig,
         cm: ClassMap,
+        build_seg: bool,
+        build_reports: bool,
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> Tuple[List[np.ndarray], List[np.ndarray], List[np.ndarray], List[Dict[str, str]], List[str]]:
         if not specs:
@@ -274,35 +334,39 @@ class GeneratorPipeline:
         if should_stop is not None and should_stop():
             return [], [], [], [], []
 
-        rgb_outs = [td_path / f"{spec.name}.png" for spec in specs]
-        self.projector.project_many_rgb(pano_path, specs, rgb_outs, out_size=cfg.out_size, fov=cfg.fov)
+        rgbs = self.projector.project_many_rgb_from_array(
+            pano_rgb,
+            specs,
+            out_size=cfg.out_size,
+            fov=cfg.fov,
+        )
+        ade_list = self._predict_ade_ids_scaled_batch(rgbs, cfg.seg_stride_px)
+        lut = self._ade_to_dataset_lut
 
-        rgbs: List[np.ndarray] = []
         labels: List[np.ndarray] = []
         segs: List[np.ndarray] = []
         reports: List[Dict[str, str]] = []
         names: List[str] = []
 
-        id2label = self.engine.id2label
-        for spec, rgb_p in zip(specs, rgb_outs):
+        id2label: Dict[int, str] = self.engine.id2label if build_reports else {}
+        for spec, rgb, ade in zip(specs, rgbs, ade_list):
             if should_stop is not None and should_stop():
                 break
-            rgb = np.array(Image.open(rgb_p).convert("RGB"), dtype=np.uint8)
-            ade = self._predict_ade_ids_scaled(rgb, cfg.seg_stride_px)
-            lbl = self._remap_ade_to_dataset_ids(ade, cm)
-            report_by_class: Dict[str, str] = {}
-            for class_id, class_name in sorted(cm.id_to_name.items()):
-                report_by_class[str(class_id)] = self._format_target_report(
-                    ade=ade,
-                    lbl=lbl,
-                    id2label=id2label,
-                    target_id=class_id,
-                    target_name=f"{class_id}: {class_name}",
-                )
-            reports.append(report_by_class)
-            rgbs.append(rgb)
+            lbl = self._remap_ade_to_dataset_ids(ade, cm, lut=lut)
             labels.append(lbl)
-            segs.append(overlay_segmentation(rgb, lbl, palette_by_class=self.palette_by_class))
+            if build_seg:
+                segs.append(overlay_segmentation(rgb, lbl, palette_by_class=self.palette_by_class))
+            if build_reports:
+                report_by_class: Dict[str, str] = {}
+                for class_id, class_name in sorted(cm.id_to_name.items()):
+                    report_by_class[str(class_id)] = self._format_target_report(
+                        ade=ade,
+                        lbl=lbl,
+                        id2label=id2label,
+                        target_id=class_id,
+                        target_name=f"{class_id}: {class_name}",
+                    )
+                reports.append(report_by_class)
             names.append(spec.name)
         return rgbs, labels, segs, reports, names
 
@@ -329,14 +393,30 @@ class GeneratorPipeline:
 
         up_specs, mid_specs, down_specs = build_view_specs(cfg)
 
-        with tempfile.TemporaryDirectory(prefix="v360_preview_") as td:
-            td_path = Path(td)
-            pano_path = td_path / "pano.png"
-            Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
-
-            up_rgb, _, up_seg, up_rep, up_names = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=up_specs, cfg=cfg, cm=cm)
-            mid_rgb, _, mid_seg, mid_rep, mid_names = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=mid_specs, cfg=cfg, cm=cm)
-            down_rgb, _, down_seg, down_rep, down_names = self._project_and_segment_group(td_path=td_path, pano_path=pano_path, specs=down_specs, cfg=cfg, cm=cm)
+        up_rgb, _, up_seg, up_rep, up_names = self._project_and_segment_group(
+            pano_rgb=pano_rgb,
+            specs=up_specs,
+            cfg=cfg,
+            cm=cm,
+            build_seg=True,
+            build_reports=True,
+        )
+        mid_rgb, _, mid_seg, mid_rep, mid_names = self._project_and_segment_group(
+            pano_rgb=pano_rgb,
+            specs=mid_specs,
+            cfg=cfg,
+            cm=cm,
+            build_seg=True,
+            build_reports=True,
+        )
+        down_rgb, _, down_seg, down_rep, down_names = self._project_and_segment_group(
+            pano_rgb=pano_rgb,
+            specs=down_specs,
+            cfg=cfg,
+            cm=cm,
+            build_seg=True,
+            build_reports=True,
+        )
 
         return PreviewResult(
             preview1_rgb=pano_rgb,
@@ -370,6 +450,7 @@ class GeneratorPipeline:
             category_names_by_dataset_id=cm.id_to_name,
             ignore_id=cm.ignore_id,
             simplify_epsilon_px=max(0.0, 0.75 * float(max(1, cfg.seg_stride_px) - 1)),
+            polygon_backend=self.polygon_backend,
         )
         writer.ensure_dirs()
 
@@ -402,26 +483,22 @@ class GeneratorPipeline:
             # Choose split per source image to avoid leakage across train/val.
             split = writer.choose_split(rng.random())
 
-            with tempfile.TemporaryDirectory(prefix="v360_gen_") as td:
-                td_path = Path(td)
-                pano_path = td_path / "pano.png"
-                Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
+            rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
+                pano_rgb=pano_rgb,
+                specs=all_specs,
+                cfg=cfg,
+                cm=cm,
+                build_seg=False,
+                build_reports=False,
+                should_stop=should_stop,
+            )
 
-                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
-                    td_path=td_path,
-                    pano_path=pano_path,
-                    specs=all_specs,
-                    cfg=cfg,
-                    cm=cm,
-                    should_stop=should_stop,
-                )
-
-                for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
-                    if should_stop is not None and should_stop():
-                        cancelled = True
-                        break
-                    filename = f"{base}_{src_idx:06d}_{spec.name}.png"
-                    writer.add_sample(split, filename, rgb, lbl)
+            for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
+                if should_stop is not None and should_stop():
+                    cancelled = True
+                    break
+                filename = f"{base}_{src_idx:06d}_{spec.name}.png"
+                writer.add_sample(split, filename, rgb, lbl)
 
             if cancelled:
                 break
@@ -451,6 +528,7 @@ class GeneratorPipeline:
             category_names_by_dataset_id=cm.id_to_name,
             ignore_id=cm.ignore_id,
             simplify_epsilon_px=max(0.0, 0.75 * float(max(1, cfg.seg_stride_px) - 1)),
+            polygon_backend=self.polygon_backend,
         )
         writer.ensure_dirs()
 
@@ -499,26 +577,22 @@ class GeneratorPipeline:
                 pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
                 pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
 
-                with tempfile.TemporaryDirectory(prefix="v360_vid_") as td:
-                    td_path = Path(td)
-                    pano_path = td_path / "pano.png"
-                    Image.fromarray(pano_rgb, mode="RGB").save(pano_path)
+                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
+                    pano_rgb=pano_rgb,
+                    specs=all_specs,
+                    cfg=cfg,
+                    cm=cm,
+                    build_seg=False,
+                    build_reports=False,
+                    should_stop=should_stop,
+                )
 
-                    rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
-                        td_path=td_path,
-                        pano_path=pano_path,
-                        specs=all_specs,
-                        cfg=cfg,
-                        cm=cm,
-                        should_stop=should_stop,
-                    )
-
-                    for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
-                        if should_stop is not None and should_stop():
-                            cancelled = True
-                            break
-                        filename = f"frame_{saved_idx:06d}_{spec.name}.png"
-                        writer.add_sample(split, filename, rgb, lbl)
+                for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
+                    if should_stop is not None and should_stop():
+                        cancelled = True
+                        break
+                    filename = f"frame_{saved_idx:06d}_{spec.name}.png"
+                    writer.add_sample(split, filename, rgb, lbl)
 
                 if cancelled:
                     break

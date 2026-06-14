@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -60,27 +60,47 @@ class Mask2FormerADEEngine:
 
     def predict_ade_ids(self, rgb_u8: np.ndarray) -> np.ndarray:
         """Returns ADE label id map with shape (H, W), dtype int32."""
+        out = self.predict_ade_ids_batch([rgb_u8], batch_size=1)
+        if not out:
+            raise RuntimeError("mask2former returned no prediction")
+        return out[0]
+
+    def predict_ade_ids_batch(self, rgb_u8_list: Sequence[np.ndarray], batch_size: int = 4) -> List[np.ndarray]:
+        """Returns ADE label maps for input images, preserving input order."""
         with self._lock:
             self.ensure_loaded()
-            if rgb_u8.ndim != 3 or rgb_u8.shape[2] != 3:
-                raise ValueError("rgb_u8 must be HxWx3")
+            if not rgb_u8_list:
+                return []
 
             torch = self._torch
             processor = self._processor
             model = self._model
             assert torch is not None and processor is not None and model is not None
 
-            h, w = rgb_u8.shape[:2]
-            inputs = processor(images=[rgb_u8], return_tensors="pt")
+            bs = max(1, int(batch_size))
             device = model.device
-            inputs = {k: v.to(device) for k, v in inputs.items()}
+            results: List[np.ndarray] = []
 
-            with torch.inference_mode():
-                if device.type == "cuda":
-                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+            for i in range(0, len(rgb_u8_list), bs):
+                chunk = list(rgb_u8_list[i : i + bs])
+                target_sizes: List[Tuple[int, int]] = []
+                for rgb_u8 in chunk:
+                    if rgb_u8.ndim != 3 or rgb_u8.shape[2] != 3:
+                        raise ValueError("rgb_u8 must be HxWx3")
+                    target_sizes.append((int(rgb_u8.shape[0]), int(rgb_u8.shape[1])))
+
+                inputs = processor(images=chunk, return_tensors="pt")
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+
+                with torch.inference_mode():
+                    if device.type == "cuda":
+                        with torch.autocast(device_type="cuda", dtype=torch.float16):
+                            outputs = model(**inputs)
+                    else:
                         outputs = model(**inputs)
-                else:
-                    outputs = model(**inputs)
 
-            pred = processor.post_process_semantic_segmentation(outputs, target_sizes=[(h, w)])[0]
-            return pred.detach().to("cpu").numpy().astype(np.int32)
+                preds = processor.post_process_semantic_segmentation(outputs, target_sizes=target_sizes)
+                for pred in preds:
+                    results.append(pred.detach().to("cpu").numpy().astype(np.int32))
+
+            return results

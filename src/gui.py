@@ -98,7 +98,7 @@ class AppGUI:
         self.var_out_size = tk.StringVar(value="512")
         self.var_up_pitch_deg = tk.StringVar(value="45")
         self.var_down_pitch_deg = tk.StringVar(value="-45")
-        self.var_seg_stride_px = tk.StringVar(value="1")
+        self.var_seg_stride_px = tk.StringVar(value="2")
 
         self.var_up_4 = tk.BooleanVar(value=False)
         self.var_up_6 = tk.BooleanVar(value=False)
@@ -283,7 +283,7 @@ class AppGUI:
         r_seg = ttk.Frame(frm_set)
         r_seg.pack(fill="x", padx=8, pady=4)
         ttk.Label(r_seg, text="推論粗さ(px)").pack(side="left")
-        ttk.Combobox(r_seg, textvariable=self.var_seg_stride_px, values=("1", "2", "4", "8"), width=8, state="readonly").pack(
+        ttk.Combobox(r_seg, textvariable=self.var_seg_stride_px, values=("1", "2", "4", "8", "16"), width=8, state="readonly").pack(
             side="left", padx=(6, 0)
         )
 

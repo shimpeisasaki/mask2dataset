@@ -57,6 +57,7 @@ class CocoDatasetWriter:
     category_names_by_dataset_id: Dict[int, str]
     ignore_id: int = 255
     simplify_epsilon_px: float = 0.0
+    polygon_backend: str = "fast"  # fast | topology
     val_ratio: float = 0.2
     seed: int = 42
 
@@ -69,6 +70,11 @@ class CocoDatasetWriter:
             if 0 <= int(x) <= 254 and int(x) != int(self.ignore_id)
         )
         self._cat_id_by_dataset_id = {did: idx + 1 for idx, did in enumerate(dataset_ids)}
+        backend = str(self.polygon_backend).strip().lower()
+        if backend not in ("fast", "topology"):
+            self.polygon_backend = "fast"
+        else:
+            self.polygon_backend = backend
 
     def ensure_dirs(self) -> None:
         (self.root / "images").mkdir(parents=True, exist_ok=True)
@@ -98,13 +104,16 @@ class CocoDatasetWriter:
     def _build_shapes_with_opencv(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
         out: List[Dict[str, object]] = []
         eps = max(0.0, float(self.simplify_epsilon_px))
+        present_ids = set(int(x) for x in np.unique(label_u8).tolist())
 
         for dataset_id in sorted(self._cat_id_by_dataset_id.keys()):
+            if int(dataset_id) not in present_ids:
+                continue
             cls_mask = (label_u8 == np.uint8(dataset_id)).astype(np.uint8)
             if int(np.count_nonzero(cls_mask)) == 0:
                 continue
 
-            contours, _ = cv2.findContours(cls_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            contours, _ = cv2.findContours(cls_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for cnt in contours:
                 if cnt is None or len(cnt) < 3:
                     continue
@@ -230,7 +239,9 @@ class CocoDatasetWriter:
         return out
 
     def _build_shapes_for_label(self, label_u8: np.ndarray) -> List[Dict[str, object]]:
-        return self._build_shapes_with_shared_topology(label_u8)
+        if self.polygon_backend == "topology":
+            return self._build_shapes_with_shared_topology(label_u8)
+        return self._build_shapes_with_opencv(label_u8)
 
     def add_sample(self, split: str, filename: str, rgb_u8: np.ndarray, label_u8: np.ndarray) -> None:
         if split not in ("train", "val"):

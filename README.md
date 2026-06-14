@@ -1,48 +1,39 @@
 # mask2dataset (Mask2Former ADE20K)
 
-360°の画像フォルダ or 360°動画から、Mask2Former(ADE20K)でセグメンテーションした学習用データセットを生成します。
+360度画像/動画から、Mask2Former(ADE20K)で推論したタイル画像とラベルJSONを生成するツールです。
 
-GUIは1ウィンドウで、
-プレビュー1(正面=yaw指定) → 切り出し設定 → プレビュー2(切り出し結果+セグ表示) → 実行
+GUIの基本フロー:
+1. プレビュー1で入力確認
+2. 切り出し設定を調整
+3. プレビュー2で方向別確認
+4. 実行
+
+## What Changed (Performance Refactor)
+
+今回のリファクタで、処理経路を高速化しました。
+
+1. ffmpeg v360をメモリ直結化
+: 一時PNGを大量に作らず、rawvideo pipeで一括投影
+2. バッチ推論
+: Mask2Formerを複数タイルまとめて推論
+3. 生成時の不要処理削減
+: 学習データ生成では、不要なプレビュー用オーバーレイ/内訳レポート生成をスキップ
+4. ADE->dataset ID変換のLUT化
+: 画素単位の変換を高速化
+5. JSON出力をミニファイ
+: 書き込みサイズとI/O時間を削減
 
 ## Requirements
 
-- `ffmpeg` (v360フィルタが有効なもの)
-- Python 3.10+（`venv` が使えること）
-- GUI用: Tkinter（Linuxだと `python3-tk` が別パッケージのことが多い）
-- Pythonパッケージ: `pip install -r requirements.txt`
+1. ffmpeg (v360 filter有効)
+2. Python 3.10+
+3. Tkinter (Linuxでは `python3-tk` が別パッケージの場合あり)
+4. `pip install -r requirements.txt`
 
-### 実行環境の注意
+初回実行時はモデルをダウンロードします。
+GPUがある場合はCUDAを自動利用します。
 
-- **初回実行時は Mask2Former のモデルをダウンロード**します（ネット接続と十分なディスク容量が必要）。
-- GPUがある場合は自動でCUDAを使います（CPUでも動きますがかなり遅いです）。
-
-### 簡易セルフチェック
-
-```bash
-ffmpeg -hide_banner -filters | grep v360
-python -c "import cv2, PIL, yaml, numpy, tkinter"
-python -c "import torch; print(torch.__version__, 'cuda=', torch.cuda.is_available())"
-```
-
-### OS packages install example (Ubuntu/Debian)
-
-```bash
-sudo apt update
-sudo apt install -y \
-  ffmpeg \
-  git \
-  python3 python3-venv python3-pip python3-tk \
-  libgl1 libglib2.0-0
-```
-
-`ffmpeg` が v360 を持っているか確認:
-
-```bash
-ffmpeg -hide_banner -filters | grep v360
-```
-
-## Quick Setup (venv)
+## Quick Setup
 
 ```bash
 git clone git@github.com:shimpeisasaki/mask2dataset.git
@@ -51,64 +42,69 @@ bash scripts/setup_venv.sh .venv
 source .venv/bin/activate
 ```
 
-補足:
-
-- `TORCH_CHANNEL` で torch 取得先を変更可能（例: `cu128`, `cu126`, `cu124`, `cpu`）
-
-```bash
-TORCH_CHANNEL=cu128 bash scripts/setup_venv.sh .venv
-```
-
 ## Run
 
 ```bash
 python3 -m src.app
 ```
 
-※ `python` コマンドが使える環境では `python -m src.app` でもOKです。
+## Output Format
 
-## Dataset Output (MMSegmentation style)
+現在の出力は以下です。
 
-出力フォルダ配下に以下を作成します:
-
-```
+```text
 OUTPUT_DIR/
-├── img_dir/
-│   ├── train/
-│   └── val/
-└── ann_dir/
-    ├── train/
-    └── val/
-
-### train/val の分割
-
-- 分割は `val_ratio=0.2` のランダム（seed固定）です。
-- **同一の元画像/元フレームから生成される複数ビューは、同じ split (train/val) に入る** ようにしています（リーク防止）。
+└── images/
+    ├── frame_xxxxxx_view.png
+    ├── frame_xxxxxx_view.json
+    └── ...
 ```
 
-### 重要: ラベルPNGは「クラスID画像」
+JSONはx-anylabeling/LabelMe系互換フォーマットです。
 
-- `ann_dir/` に保存されるPNGは、見た目が真っ黒〜暗いグレーになります。
-- これは **RGBで色を塗った画像ではなく**、ピクセル値そのものがクラスIDです。
-- 値は `0,1,2,,,` と `255(ignore)` のみを使います。
+## Performance Tuning
 
-## Class Mapping (ADE20K)
+### GUI側の推奨
 
-クラスは`config/class_map.yaml`で設定
+1. 推論粗さ(px)を上げる (`2`, `4`, `8`, `16`)
+2. 必要な方向だけチェックON
+3. 出力サイズを必要最小限にする
 
-例:
+### 環境変数
 
-```yaml
-ignore_id: 255
-unmapped: 6
-classes:
-  0:
-    name: sky
-    ade20k: [sky]
-  5:
-    name: person
-    ade20k: [person]
-  6:
-    name: unlabeled
-    ade20k: [windowpane, curtain, cushion, lamp]
+1. `MASK2DATASET_INFER_BATCH`
+: 推論バッチサイズ (既定 `4`)
+
+```bash
+MASK2DATASET_INFER_BATCH=8 python3 -m src.app
 ```
+
+2. `MASK2DATASET_POLYGON_BACKEND`
+: ポリゴン化方式 (`fast` or `topology`, 既定 `fast`)
+
+```bash
+MASK2DATASET_POLYGON_BACKEND=topology python3 -m src.app
+```
+
+`fast` は速度重視、`topology` は境界共有の整合性重視です。
+
+## Class Mapping
+
+クラス定義は [config/new_class_map.yaml](config/new_class_map.yaml) を使います。
+
+`ignore_id` は255固定、`unmapped` は未対応ADEクラスの行き先です。
+
+## Repository Guide
+
+主要な責務は次の通りです。
+
+1. [src/gui.py](src/gui.py)
+: GUIと実行制御
+2. [src/pipeline.py](src/pipeline.py)
+: 生成パイプライン本体
+3. [src/v360.py](src/v360.py)
+: ffmpeg v360投影（高速メモリ経路を含む）
+4. [src/segmentation/mask2former.py](src/segmentation/mask2former.py)
+: Mask2Former推論エンジン
+5. [src/dataset/writer.py](src/dataset/writer.py)
+: PNG/JSON出力
