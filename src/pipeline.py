@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-from src.dataset.writer import CocoDatasetWriter
+from src.dataset.writer import MMSegDatasetWriter
 from src.segmentation.class_map import ClassMap
 from src.segmentation.mask2former import Mask2FormerADEEngine
 from src.segmentation.palette import default_palette
@@ -156,9 +156,6 @@ class GeneratorPipeline:
         except Exception:
             infer_batch = 4
         self.infer_batch_size = max(1, infer_batch)
-
-        polygon_backend = str(os.environ.get("MASK2DATASET_POLYGON_BACKEND", "fast")).strip().lower()
-        self.polygon_backend = polygon_backend if polygon_backend in ("fast", "topology") else "fast"
         self.class_map_path = Path(__file__).resolve().parent.parent / "config" / "new_class_map.yaml"
         self.palette_by_class: Dict[int, Tuple[int, int, int]] = {}
         self._class_map: Optional[ClassMap] = None
@@ -442,16 +439,11 @@ class GeneratorPipeline:
         output_root: Path,
         cfg: ExtractConfig,
         include_spec_names: Optional[Sequence[str]] = None,
+        generate_labels: bool = True,
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> None:
-        cm = self._ensure_class_map()
-        writer = CocoDatasetWriter(
-            root=output_root,
-            category_names_by_dataset_id=cm.id_to_name,
-            ignore_id=cm.ignore_id,
-            simplify_epsilon_px=max(0.0, 0.75 * float(max(1, cfg.seg_stride_px) - 1)),
-            polygon_backend=self.polygon_backend,
-        )
+        cm = self._ensure_class_map() if generate_labels else None
+        writer = MMSegDatasetWriter(root=output_root)
         writer.ensure_dirs()
 
         rng = random.Random(writer.seed)
@@ -462,7 +454,8 @@ class GeneratorPipeline:
         if not all_specs:
             raise ValueError("no enabled view directions to generate")
 
-        self.logger.log(f"Generate from images: count={len(image_paths)} views={len(all_specs)}")
+        mode = "images+masks" if generate_labels else "images-only"
+        self.logger.log(f"Generate from images: count={len(image_paths)} views={len(all_specs)} mode={mode}")
 
         cancelled = False
         for src_idx, path in enumerate(image_paths):
@@ -483,22 +476,39 @@ class GeneratorPipeline:
             # Choose split per source image to avoid leakage across train/val.
             split = writer.choose_split(rng.random())
 
-            rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
-                pano_rgb=pano_rgb,
-                specs=all_specs,
-                cfg=cfg,
-                cm=cm,
-                build_seg=False,
-                build_reports=False,
-                should_stop=should_stop,
-            )
+            if generate_labels:
+                if cm is None:
+                    raise RuntimeError("class map is not loaded")
+                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
+                    pano_rgb=pano_rgb,
+                    specs=all_specs,
+                    cfg=cfg,
+                    cm=cm,
+                    build_seg=False,
+                    build_reports=False,
+                    should_stop=should_stop,
+                )
 
-            for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
-                if should_stop is not None and should_stop():
-                    cancelled = True
-                    break
-                filename = f"{base}_{src_idx:06d}_{spec.name}.png"
-                writer.add_sample(split, filename, rgb, lbl)
+                for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
+                    if should_stop is not None and should_stop():
+                        cancelled = True
+                        break
+                    filename = f"{base}_{src_idx:06d}_{spec.name}.png"
+                    writer.save_image(split, filename, rgb)
+                    writer.save_label(split, filename, lbl)
+            else:
+                rgb_tiles = self.projector.project_many_rgb_from_array(
+                    pano_rgb,
+                    all_specs,
+                    out_size=cfg.out_size,
+                    fov=cfg.fov,
+                )
+                for spec, rgb in zip(all_specs, rgb_tiles):
+                    if should_stop is not None and should_stop():
+                        cancelled = True
+                        break
+                    filename = f"{base}_{src_idx:06d}_{spec.name}.png"
+                    writer.save_image(split, filename, rgb)
 
             if cancelled:
                 break
@@ -506,7 +516,6 @@ class GeneratorPipeline:
             if (src_idx + 1) % 5 == 0:
                 self.logger.log(f"processed {src_idx+1}/{len(image_paths)}")
 
-        writer.save_annotations()
         if cancelled:
             self.logger.log("cancelled")
         else:
@@ -520,16 +529,11 @@ class GeneratorPipeline:
         fps: float,
         cfg: ExtractConfig,
         include_spec_names: Optional[Sequence[str]] = None,
+        generate_labels: bool = True,
         should_stop: Optional[Callable[[], bool]] = None,
     ) -> None:
-        cm = self._ensure_class_map()
-        writer = CocoDatasetWriter(
-            root=output_root,
-            category_names_by_dataset_id=cm.id_to_name,
-            ignore_id=cm.ignore_id,
-            simplify_epsilon_px=max(0.0, 0.75 * float(max(1, cfg.seg_stride_px) - 1)),
-            polygon_backend=self.polygon_backend,
-        )
+        cm = self._ensure_class_map() if generate_labels else None
+        writer = MMSegDatasetWriter(root=output_root)
         writer.ensure_dirs()
 
         rng = random.Random(writer.seed)
@@ -553,7 +557,8 @@ class GeneratorPipeline:
         frame_idx = 0
         saved_idx = 0
 
-        self.logger.log(f"Generate from video: fps={fps} step={step_s:.3f}s views={len(all_specs)}")
+        mode = "images+masks" if generate_labels else "images-only"
+        self.logger.log(f"Generate from video: fps={fps} step={step_s:.3f}s views={len(all_specs)} mode={mode}")
 
         cancelled = False
         try:
@@ -577,22 +582,39 @@ class GeneratorPipeline:
                 pano_bgr = resize_equirect_for_speed(frame, cfg.out_size)
                 pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
 
-                rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
-                    pano_rgb=pano_rgb,
-                    specs=all_specs,
-                    cfg=cfg,
-                    cm=cm,
-                    build_seg=False,
-                    build_reports=False,
-                    should_stop=should_stop,
-                )
+                if generate_labels:
+                    if cm is None:
+                        raise RuntimeError("class map is not loaded")
+                    rgb_tiles, lbl_tiles, _, _, _ = self._project_and_segment_group(
+                        pano_rgb=pano_rgb,
+                        specs=all_specs,
+                        cfg=cfg,
+                        cm=cm,
+                        build_seg=False,
+                        build_reports=False,
+                        should_stop=should_stop,
+                    )
 
-                for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
-                    if should_stop is not None and should_stop():
-                        cancelled = True
-                        break
-                    filename = f"frame_{saved_idx:06d}_{spec.name}.png"
-                    writer.add_sample(split, filename, rgb, lbl)
+                    for spec, rgb, lbl in zip(all_specs, rgb_tiles, lbl_tiles):
+                        if should_stop is not None and should_stop():
+                            cancelled = True
+                            break
+                        filename = f"frame_{saved_idx:06d}_{spec.name}.png"
+                        writer.save_image(split, filename, rgb)
+                        writer.save_label(split, filename, lbl)
+                else:
+                    rgb_tiles = self.projector.project_many_rgb_from_array(
+                        pano_rgb,
+                        all_specs,
+                        out_size=cfg.out_size,
+                        fov=cfg.fov,
+                    )
+                    for spec, rgb in zip(all_specs, rgb_tiles):
+                        if should_stop is not None and should_stop():
+                            cancelled = True
+                            break
+                        filename = f"frame_{saved_idx:06d}_{spec.name}.png"
+                        writer.save_image(split, filename, rgb)
 
                 if cancelled:
                     break
@@ -603,7 +625,6 @@ class GeneratorPipeline:
         finally:
             cap.release()
 
-        writer.save_annotations()
         if cancelled:
             self.logger.log("cancelled")
         else:

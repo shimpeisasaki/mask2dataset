@@ -17,7 +17,7 @@ import yaml
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
-from src.pipeline import ExtractConfig, GeneratorPipeline, PreviewResult, overlay_segmentation, resize_equirect_for_speed
+from src.pipeline import ExtractConfig, GeneratorPipeline, resize_equirect_for_speed
 from src.segmentation.palette import default_palette
 from src.utils.logging import Logger
 
@@ -99,6 +99,7 @@ class AppGUI:
         self.var_up_pitch_deg = tk.StringVar(value="45")
         self.var_down_pitch_deg = tk.StringVar(value="-45")
         self.var_seg_stride_px = tk.StringVar(value="2")
+        self.var_generate_masks = tk.BooleanVar(value=True)
 
         self.var_up_4 = tk.BooleanVar(value=False)
         self.var_up_6 = tk.BooleanVar(value=False)
@@ -120,10 +121,6 @@ class AppGUI:
 
         self.preview1_photo: Optional[ImageTk.PhotoImage] = None
         self.preview1_rgb: Optional[np.ndarray] = None
-        self.preview1_seg_rgb: Optional[np.ndarray] = None
-        self.preview_loaded_time: Optional[float] = None
-
-        self._preview1_req_id: int = 0
 
         self.tiles_up: List[Tile] = []
         self.tiles_mid: List[Tile] = []
@@ -286,6 +283,7 @@ class AppGUI:
         ttk.Combobox(r_seg, textvariable=self.var_seg_stride_px, values=("1", "2", "4", "8", "16"), width=8, state="readonly").pack(
             side="left", padx=(6, 0)
         )
+        ttk.Checkbutton(r_seg, text="ラベルマスクを生成", variable=self.var_generate_masks).pack(side="left", padx=(16, 0))
 
         grid = ttk.Frame(frm_set)
         grid.pack(fill="x", padx=8, pady=6)
@@ -305,16 +303,16 @@ class AppGUI:
 
         frm_p1_legend = ttk.Frame(left)
         frm_p1_legend.pack(fill="x", padx=0, pady=6)
-        # width ratio: preview1 : legend = 4 : 6
-        frm_p1_legend.grid_columnconfigure(0, weight=4)
-        frm_p1_legend.grid_columnconfigure(1, weight=6)
+        # width ratio: preview1 : legend = 1 : 1
+        frm_p1_legend.grid_columnconfigure(0, weight=1)
+        frm_p1_legend.grid_columnconfigure(1, weight=1)
 
         frm_p1 = ttk.LabelFrame(frm_p1_legend, text="プレビュー1 (正面指定: yawスライダー)")
         frm_p1.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=0)
         self.frm_p1 = frm_p1
 
         frm_legend = ttk.LabelFrame(frm_p1_legend, text="クラス凡例")
-        frm_legend.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        frm_legend.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=0)
         self.frm_legend = frm_legend
 
         self.lbl_preview1 = tk.Label(frm_p1, borderwidth=1, relief="solid")
@@ -439,6 +437,7 @@ class AppGUI:
             self.var_up_pitch_deg,
             self.var_down_pitch_deg,
             self.var_seg_stride_px,
+            self.var_generate_masks,
             self.var_up_4,
             self.var_up_6,
             self.var_top,
@@ -494,9 +493,6 @@ class AppGUI:
         self._persist_paths()
         self._build_legend()
 
-        if self.var_show_seg.get() and self.preview1_rgb is not None:
-            self._start_preview1_segmentation(self.preview1_rgb)
-
         if self.tiles_up or self.tiles_mid or self.tiles_down:
             self._on_preview2()
 
@@ -522,11 +518,12 @@ class AppGUI:
         grid = ttk.Frame(frm)
         grid.pack(fill="x", padx=8, pady=6)
 
-        # Show one class per row.
-        cols = 1
-        for i, (cls_id, cls_name) in enumerate(names.items()):
-            if not (0 <= cls_id <= 254):
-                continue
+        entries = [(cls_id, cls_name) for cls_id, cls_name in names.items() if 0 <= cls_id <= 254]
+        cols = 2 if len(entries) >= 2 else 1
+        for c in range(cols):
+            grid.grid_columnconfigure(c, weight=1)
+
+        for i, (cls_id, cls_name) in enumerate(entries):
 
             r = i // cols
             c = i % cols
@@ -548,49 +545,8 @@ class AppGUI:
             )
 
     def _on_toggle_show_seg(self) -> None:
-        if self.var_show_seg.get() and self.preview1_rgb is not None and self.preview1_seg_rgb is None:
-            self._start_preview1_segmentation(self.preview1_rgb)
         self._refresh_preview1_overlay()
         self._refresh_preview2_images()
-
-    def _start_preview1_segmentation(self, pano_rgb: np.ndarray, *, req_id: Optional[int] = None) -> None:
-        if req_id is None:
-            self._preview1_req_id += 1
-            req_id = self._preview1_req_id
-
-        self._append_log("[info] preview1: segmenting...")
-
-        def worker() -> None:
-            try:
-                self.pipeline.engine.ensure_loaded()
-                cm = self.pipeline._ensure_class_map()  # cache if already loaded
-
-                try:
-                    seg_stride_px = max(1, int(self.var_seg_stride_px.get()))
-                except Exception:
-                    seg_stride_px = 1
-                ade = self.pipeline._predict_ade_ids_scaled(pano_rgb, seg_stride_px)
-                unmapped = cm.ade_id_to_dataset_id.get(-1, 255)
-                lbl = np.full(ade.shape, int(unmapped), dtype=np.uint8)
-                for ade_id, dataset_id in cm.ade_id_to_dataset_id.items():
-                    if ade_id < 0:
-                        continue
-                    lbl[ade == int(ade_id)] = np.uint8(int(dataset_id))
-
-                seg_rgb = overlay_segmentation(pano_rgb, lbl, palette_by_class=self.pipeline.palette_by_class)
-            except Exception as e:
-                self.logger.log(f"preview1 segmentation failed: {e}")
-                return
-
-            def apply() -> None:
-                if req_id != self._preview1_req_id:
-                    return
-                self.preview1_seg_rgb = seg_rgb
-                self._refresh_preview1_overlay()
-
-            self.root.after(0, apply)
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def _append_log(self, line: str) -> None:
         def _do() -> None:
@@ -810,6 +766,8 @@ class AppGUI:
             self.var_down_pitch_deg.set(raw["down_pitch_deg"])
         if isinstance(raw.get("seg_stride_px"), str):
             self.var_seg_stride_px.set(raw["seg_stride_px"])
+        if "generate_masks" in raw:
+            self.var_generate_masks.set(_as_bool(raw.get("generate_masks"), default=bool(self.var_generate_masks.get())))
         for key, var in (
             ("up_4", self.var_up_4),
             ("up_6", self.var_up_6),
@@ -863,6 +821,7 @@ class AppGUI:
             "up_pitch_deg": self.var_up_pitch_deg.get().strip(),
             "down_pitch_deg": self.var_down_pitch_deg.get().strip(),
             "seg_stride_px": self.var_seg_stride_px.get().strip(),
+            "generate_masks": bool(self.var_generate_masks.get()),
             "up_4": bool(self.var_up_4.get()),
             "up_6": bool(self.var_up_6.get()),
             "top": bool(self.var_top.get()),
@@ -992,19 +951,11 @@ class AppGUI:
             messagebox.showerror("エラー", str(e))
             return
 
-        self._preview1_req_id += 1
-        req_id = self._preview1_req_id
-
         # Keep the base RGB for overlay refresh
         pano_bgr = resize_equirect_for_speed(bgr, cfg.out_size)
         pano_rgb = cv2.cvtColor(pano_bgr, cv2.COLOR_BGR2RGB)
         self.preview1_rgb = pano_rgb
-        self.preview1_seg_rgb = None
-        self.preview_loaded_time = t
         self._refresh_preview1_overlay()
-
-        if self.var_show_seg.get():
-            self._start_preview1_segmentation(pano_rgb, req_id=req_id)
 
         if t is None:
             self.lbl_time.config(text="")
@@ -1018,7 +969,7 @@ class AppGUI:
         if self.preview1_rgb is None:
             return
 
-        rgb = self.preview1_seg_rgb if (self.var_show_seg.get() and self.preview1_seg_rgb is not None) else self.preview1_rgb
+        rgb = self.preview1_rgb
         h, w = rgb.shape[:2]
         yaw0 = float(self.var_yaw_offset.get())
         yaw_disp = (yaw0 + 180.0) % 360.0
@@ -1299,6 +1250,7 @@ class AppGUI:
                         fps=fps,
                         cfg=cfg,
                         include_spec_names=selected_names,
+                        generate_labels=bool(self.var_generate_masks.get()),
                         should_stop=lambda: self._run_stop_event.is_set(),
                     )
                 else:
@@ -1323,6 +1275,7 @@ class AppGUI:
                         output_root=out_dir,
                         cfg=cfg,
                         include_spec_names=selected_names,
+                        generate_labels=bool(self.var_generate_masks.get()),
                         should_stop=lambda: self._run_stop_event.is_set(),
                     )
 
