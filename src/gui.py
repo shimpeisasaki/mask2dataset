@@ -84,7 +84,7 @@ class AppGUI:
         self.root = root
         self.root.title("360 Dataset Generator (Mask2Former ADE20K)")
 
-        self.var_input_type = tk.StringVar(value="video")  # video | images
+        self.var_input_type = tk.StringVar(value="video")  # video | images360 | plain_images
 
         self.var_video_path = tk.StringVar(value="")
         self.var_images_dir = tk.StringVar(value="")
@@ -121,6 +121,7 @@ class AppGUI:
 
         self.preview1_photo: Optional[ImageTk.PhotoImage] = None
         self.preview1_rgb: Optional[np.ndarray] = None
+        self._preview1_req_id: int = 0
 
         self.tiles_up: List[Tile] = []
         self.tiles_mid: List[Tile] = []
@@ -206,10 +207,13 @@ class AppGUI:
 
         row0 = ttk.Frame(frm_in)
         row0.pack(fill="x", padx=8, pady=4)
-        ttk.Radiobutton(row0, text="動画", variable=self.var_input_type, value="video", command=self._refresh_input_state).pack(
+        ttk.Radiobutton(row0, text="360度動画", variable=self.var_input_type, value="video", command=self._refresh_input_state).pack(
             side="left"
         )
-        ttk.Radiobutton(row0, text="画像フォルダ", variable=self.var_input_type, value="images", command=self._refresh_input_state).pack(
+        ttk.Radiobutton(row0, text="360度画像", variable=self.var_input_type, value="images360", command=self._refresh_input_state).pack(
+            side="left", padx=(12, 0)
+        )
+        ttk.Radiobutton(row0, text="通常画像", variable=self.var_input_type, value="plain_images", command=self._refresh_input_state).pack(
             side="left", padx=(12, 0)
         )
 
@@ -359,10 +363,12 @@ class AppGUI:
 
         rowp2 = ttk.Frame(frm_p2)
         rowp2.pack(fill="x", padx=8, pady=4)
-        ttk.Button(rowp2, text="プレビュー2生成", command=self._on_preview2).pack(side="left")
-        ttk.Checkbutton(
+        self.btn_preview2 = ttk.Button(rowp2, text="プレビュー2生成", command=self._on_preview2)
+        self.btn_preview2.pack(side="left")
+        self.chk_preview2_show_seg = ttk.Checkbutton(
             rowp2, text="セグメンテーション表示", variable=self.var_show_seg, command=self._on_toggle_show_seg
-        ).pack(side="left", padx=(14, 0))
+        )
+        self.chk_preview2_show_seg.pack(side="left", padx=(14, 0))
         ttk.Label(rowp2, text="内訳表示:").pack(side="left", padx=(14, 4))
         self.cmb_preview2_report = ttk.Combobox(rowp2, textvariable=self.var_preview2_report_kind, width=18, state="readonly")
         self.cmb_preview2_report.pack(side="left")
@@ -572,7 +578,8 @@ class AppGUI:
     def _browse_images_dir(self) -> None:
         path = filedialog.askdirectory()
         if path:
-            self.var_input_type.set("images")
+            if self.var_input_type.get() == "video":
+                self.var_input_type.set("images360")
             self._refresh_input_state()
             self.var_images_dir.set(path)
             self._set_image_folder(Path(path))
@@ -623,7 +630,7 @@ class AppGUI:
         if not folder_str:
             return
         self._set_image_folder(Path(folder_str), keep_index=False)
-        if self.var_input_type.get() != "images":
+        if self.var_input_type.get() not in ("images360", "plain_images"):
             return
         self._on_preview1()
 
@@ -634,9 +641,12 @@ class AppGUI:
             self._persist_paths()
 
     def _refresh_input_state(self) -> None:
-        is_video = self.var_input_type.get() == "video"
+        input_mode = self.var_input_type.get()
+        is_video = input_mode == "video"
+        is_image_mode = input_mode in ("images360", "plain_images")
+        is_plain = input_mode == "plain_images"
         state_video = "normal" if is_video else "disabled"
-        state_images = "normal" if not is_video else "disabled"
+        state_images = "normal" if is_image_mode else "disabled"
 
         for w in (self.ent_video, self.btn_video, self.ent_fps, self.ent_preview_time):
             w.configure(state=state_video)
@@ -648,7 +658,20 @@ class AppGUI:
         for w in (self.btn_prev_image, self.btn_next_image):
             w.configure(state=state_images)
 
-        if not is_video:
+        if is_plain:
+            self.btn_preview2.configure(state="disabled")
+            self.chk_preview2_show_seg.configure(state="disabled")
+            self.cmb_preview2_report.configure(state="disabled")
+            self._clear_preview2()
+            self.var_preview2_report.set("通常画像モードではプレビュー2は使用しません。")
+        else:
+            self.btn_preview2.configure(state="normal")
+            self.chk_preview2_show_seg.configure(state="normal")
+            self.cmb_preview2_report.configure(state="readonly")
+            if self.var_preview2_report.get() == "通常画像モードではプレビュー2は使用しません。":
+                self.var_preview2_report.set("")
+
+        if is_image_mode:
             # Refresh file list if path is already set.
             folder_str = self.var_images_dir.get().strip()
             if folder_str:
@@ -677,7 +700,7 @@ class AppGUI:
     def _update_image_index_label(self) -> None:
         if not hasattr(self, "lbl_image_idx"):
             return
-        if self.var_input_type.get() != "images":
+        if self.var_input_type.get() not in ("images360", "plain_images"):
             self.lbl_image_idx.config(text="")
             return
         n = len(self._image_files)
@@ -688,7 +711,7 @@ class AppGUI:
         self.lbl_image_idx.config(text=f"({self._image_index+1}/{n}) {cur.name}")
 
     def _on_prev_image(self) -> None:
-        if self.var_input_type.get() != "images":
+        if self.var_input_type.get() not in ("images360", "plain_images"):
             return
         if not self._image_files:
             self._set_image_folder(Path(self.var_images_dir.get().strip()))
@@ -699,7 +722,7 @@ class AppGUI:
         self._on_preview1()
 
     def _on_next_image(self) -> None:
-        if self.var_input_type.get() != "images":
+        if self.var_input_type.get() not in ("images360", "plain_images"):
             return
         if not self._image_files:
             self._set_image_folder(Path(self.var_images_dir.get().strip()))
@@ -739,7 +762,12 @@ class AppGUI:
             return default
 
         if isinstance(raw.get("input_type"), str):
-            self.var_input_type.set(raw["input_type"])
+            input_type = str(raw["input_type"]).strip()
+            if input_type == "images":
+                input_type = "images360"
+            if input_type not in ("video", "images360", "plain_images"):
+                input_type = "video"
+            self.var_input_type.set(input_type)
         if isinstance(raw.get("video_path"), str):
             self.var_video_path.set(raw["video_path"])
         if isinstance(raw.get("images_dir"), str):
@@ -842,7 +870,7 @@ class AppGUI:
             # Best-effort; ignore persistence failures.
             return
 
-    def _parse_cfg(self) -> ExtractConfig:
+    def _parse_cfg(self, *, require_views: bool = True) -> ExtractConfig:
         try:
             fov = float(self.var_fov.get())
         except Exception:
@@ -894,13 +922,14 @@ class AppGUI:
             use_down_6=bool(self.var_down_6.get()),
         )
 
-        # Validate view count 1..19
-        from src.pipeline import build_view_specs
+        if require_views:
+            # Validate view count 1..19
+            from src.pipeline import build_view_specs
 
-        up, mid, down = build_view_specs(cfg)
-        count = len(up) + len(mid) + len(down)
-        if count < 1 or count > 19:
-            raise ValueError("view count must be 1..19")
+            up, mid, down = build_view_specs(cfg)
+            count = len(up) + len(mid) + len(down)
+            if count < 1 or count > 19:
+                raise ValueError("view count must be 1..19")
         return cfg
 
     def _load_preview1_bgr(self) -> Tuple[np.ndarray, Optional[float]]:
@@ -944,11 +973,26 @@ class AppGUI:
         return bgr, None
 
     def _on_preview1(self) -> None:
+        input_mode = self.var_input_type.get()
+        is_plain = input_mode == "plain_images"
         try:
             bgr, t = self._load_preview1_bgr()
-            cfg = self._parse_cfg()
+            cfg = self._parse_cfg(require_views=not is_plain)
         except Exception as e:
             messagebox.showerror("エラー", str(e))
+            return
+
+        self._preview1_req_id += 1
+        req_id = self._preview1_req_id
+
+        if is_plain:
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            self.preview1_rgb = rgb
+            self._refresh_preview1_overlay()
+            self.lbl_time.config(text="")
+            self._clear_preview2()
+            self.var_preview2_report.set("通常画像モードではプレビュー2は使用しません。")
+            self._start_preview1_plain_segmentation(input_bgr=bgr, seg_stride_px=cfg.seg_stride_px, req_id=req_id)
             return
 
         # Keep the base RGB for overlay refresh
@@ -965,19 +1009,45 @@ class AppGUI:
         if self.var_input_type.get() == "video":
             self._schedule_preview2_auto_refresh()
 
+    def _start_preview1_plain_segmentation(self, *, input_bgr: np.ndarray, seg_stride_px: int, req_id: int) -> None:
+        self._append_log("[info] preview1: segmenting plain image...")
+
+        def worker() -> None:
+            try:
+                _rgb, _lbl, seg_rgb = self.pipeline.segment_plain_image(
+                    input_bgr=input_bgr,
+                    seg_stride_px=seg_stride_px,
+                    reload_class_map=False,
+                )
+            except Exception as e:
+                self.logger.log(f"preview1 segmentation failed: {e}")
+                return
+
+            def apply() -> None:
+                if req_id != self._preview1_req_id:
+                    return
+                if self.var_input_type.get() != "plain_images":
+                    return
+                self.preview1_rgb = seg_rgb
+                self._refresh_preview1_overlay()
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _refresh_preview1_overlay(self) -> None:
         if self.preview1_rgb is None:
             return
 
         rgb = self.preview1_rgb
         h, w = rgb.shape[:2]
-        yaw0 = float(self.var_yaw_offset.get())
-        yaw_disp = (yaw0 + 180.0) % 360.0
-        x = int((yaw_disp / 360.0) * w)
-
         img = rgb.copy()
-        x = max(0, min(w - 1, x))
-        img[:, max(0, x - 1) : min(w, x + 2), :] = (0, 255, 255)
+        if self.var_input_type.get() != "plain_images":
+            yaw0 = float(self.var_yaw_offset.get())
+            yaw_disp = (yaw0 + 180.0) % 360.0
+            x = int((yaw_disp / 360.0) * w)
+            x = max(0, min(w - 1, x))
+            img[:, max(0, x - 1) : min(w, x + 2), :] = (0, 255, 255)
 
         pil = _pil_from_rgb(img)
         # Scale to fit
@@ -1105,8 +1175,12 @@ class AppGUI:
         refresh_group(self.tiles_down)
 
     def _on_preview2(self) -> None:
+        if self.var_input_type.get() == "plain_images":
+            self._clear_preview2()
+            self.var_preview2_report.set("通常画像モードではプレビュー2は使用しません。")
+            return
         try:
-            cfg = self._parse_cfg()
+            cfg = self._parse_cfg(require_views=True)
             bgr, t = self._load_preview1_bgr()
         except Exception as e:
             messagebox.showerror("エラー", str(e))
@@ -1208,8 +1282,11 @@ class AppGUI:
             messagebox.showinfo("実行中", "現在の処理が完了するまでお待ちください。中断する場合は「中断」を押してください。")
             return
 
+        input_mode = self.var_input_type.get()
+        is_plain = input_mode == "plain_images"
+
         try:
-            cfg = self._parse_cfg()
+            cfg = self._parse_cfg(require_views=not is_plain)
         except Exception as e:
             messagebox.showerror("エラー", str(e))
             return
@@ -1228,7 +1305,7 @@ class AppGUI:
 
         def worker() -> None:
             try:
-                if self.var_input_type.get() == "video":
+                if input_mode == "video":
                     video_str = self.var_video_path.get().strip()
                     if not video_str:
                         raise ValueError("動画パスが未指定です")
@@ -1253,7 +1330,7 @@ class AppGUI:
                         generate_labels=bool(self.var_generate_masks.get()),
                         should_stop=lambda: self._run_stop_event.is_set(),
                     )
-                else:
+                elif input_mode == "images360":
                     folder_str = self.var_images_dir.get().strip()
                     if not folder_str:
                         raise ValueError("画像フォルダが未指定です")
@@ -1276,6 +1353,28 @@ class AppGUI:
                         cfg=cfg,
                         include_spec_names=selected_names,
                         generate_labels=bool(self.var_generate_masks.get()),
+                        should_stop=lambda: self._run_stop_event.is_set(),
+                    )
+                else:
+                    folder_str = self.var_images_dir.get().strip()
+                    if not folder_str:
+                        raise ValueError("画像フォルダが未指定です")
+                    folder = Path(folder_str)
+                    if not folder.is_dir():
+                        raise ValueError("画像フォルダが正しくありません")
+                    patterns = ["*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG"]
+                    files: List[Path] = []
+                    for pat in patterns:
+                        files.extend([Path(p) for p in glob.glob(str(folder / pat))])
+                    files = sorted(set(files))
+                    if not files:
+                        raise ValueError("画像フォルダに画像がありません")
+
+                    self.pipeline.generate_dataset_from_plain_images(
+                        image_paths=files,
+                        output_root=out_dir,
+                        seg_stride_px=cfg.seg_stride_px,
+                        generate_labels=True,
                         should_stop=lambda: self._run_stop_event.is_set(),
                     )
 

@@ -314,6 +314,24 @@ class GeneratorPipeline:
             out.append(ade_full.astype(np.int32))
         return out
 
+    def segment_plain_image(
+        self,
+        *,
+        input_bgr: np.ndarray,
+        seg_stride_px: int,
+        reload_class_map: bool = False,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Run segmentation for a regular image without 360 projection.
+
+        Returns (rgb, label_u8, overlay_rgb).
+        """
+        cm = self._ensure_class_map(force_reload=reload_class_map)
+        rgb = cv2.cvtColor(input_bgr, cv2.COLOR_BGR2RGB)
+        ade = self._predict_ade_ids_scaled(rgb, seg_stride_px)
+        lbl = self._remap_ade_to_dataset_ids(ade, cm, lut=self._ade_to_dataset_lut)
+        seg = overlay_segmentation(rgb, lbl, palette_by_class=self.palette_by_class)
+        return rgb, lbl, seg
+
     def _project_and_segment_group(
         self,
         *,
@@ -624,6 +642,54 @@ class GeneratorPipeline:
                     self.logger.log(f"saved frames: {saved_idx}")
         finally:
             cap.release()
+
+        if cancelled:
+            self.logger.log("cancelled")
+        else:
+            self.logger.log("done")
+
+    def generate_dataset_from_plain_images(
+        self,
+        *,
+        image_paths: Sequence[Path],
+        output_root: Path,
+        seg_stride_px: int,
+        generate_labels: bool = True,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> None:
+        cm = self._ensure_class_map() if generate_labels else None
+        writer = MMSegDatasetWriter(root=output_root)
+        writer.ensure_dirs()
+
+        rng = random.Random(writer.seed)
+        mode = "images+masks" if generate_labels else "images-only"
+        self.logger.log(f"Generate from plain images: count={len(image_paths)} mode={mode}")
+
+        cancelled = False
+        for src_idx, path in enumerate(image_paths):
+            if should_stop is not None and should_stop():
+                cancelled = True
+                break
+
+            bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if bgr is None:
+                self.logger.log(f"skip unreadable image: {path}")
+                continue
+
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            split = writer.choose_split(rng.random())
+            filename = f"{path.stem}_{src_idx:06d}.png"
+            writer.save_image(split, filename, rgb)
+
+            if generate_labels:
+                if cm is None:
+                    raise RuntimeError("class map is not loaded")
+                ade = self._predict_ade_ids_scaled(rgb, seg_stride_px)
+                lbl = self._remap_ade_to_dataset_ids(ade, cm, lut=self._ade_to_dataset_lut)
+                writer.save_label(split, filename, lbl)
+
+            if (src_idx + 1) % 5 == 0:
+                self.logger.log(f"processed {src_idx+1}/{len(image_paths)}")
 
         if cancelled:
             self.logger.log("cancelled")
