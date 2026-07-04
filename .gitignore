@@ -15,6 +15,7 @@ __pycache__/
 output/
 out/
 *.log
+.mask2dataset/
 
 # OS
 .DS_Store

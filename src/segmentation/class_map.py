@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
+import re
+from typing import Dict, List, Mapping
 
 import yaml
 
@@ -20,6 +21,11 @@ class ClassMap:
     def _normalize_label_name(name: str) -> str:
         return name.strip().lower()
 
+    @staticmethod
+    def _compact_label_name(name: str) -> str:
+        # Compact form improves matching robustness for names like "street light" vs "streetlight".
+        return re.sub(r"[^a-z0-9]+", "", str(name).strip().lower())
+
     @classmethod
     def from_yaml(cls, path: Path, ade_id2label: Mapping[int, str]) -> "ClassMap":
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -34,9 +40,25 @@ class ClassMap:
         if not isinstance(classes, dict):
             raise ValueError("yaml must contain 'classes' mapping: {0: {name, ade20k:[...]}, ...}")
 
-        ade_name_to_id: Dict[str, int] = {
-            cls._normalize_label_name(v): int(k) for k, v in ade_id2label.items()
-        }
+        ade_name_to_id: Dict[str, int] = {}
+        for ade_id, raw_name in ade_id2label.items():
+            did = int(ade_id)
+            name = str(raw_name)
+            norm = cls._normalize_label_name(name)
+            compact = cls._compact_label_name(name)
+            if norm:
+                ade_name_to_id.setdefault(norm, did)
+            if compact:
+                ade_name_to_id.setdefault(compact, did)
+
+            # Some ADE labels can appear as comma-separated aliases in model configs.
+            for token in name.split(","):
+                t_norm = cls._normalize_label_name(token)
+                t_compact = cls._compact_label_name(token)
+                if t_norm:
+                    ade_name_to_id.setdefault(t_norm, did)
+                if t_compact:
+                    ade_name_to_id.setdefault(t_compact, did)
 
         id_to_name: Dict[int, str] = {}
         ade_id_to_dataset_id: Dict[int, int] = {}
@@ -59,7 +81,13 @@ class ClassMap:
                 key = cls._normalize_label_name(str(ade_name))
                 ade_id = ade_name_to_id.get(key)
                 if ade_id is None:
-                    raise ValueError(f"unknown ADE20K label name in yaml: '{ade_name}'")
+                    ade_id = ade_name_to_id.get(cls._compact_label_name(key))
+                if ade_id is None:
+                    # Offer nearby candidates for easier map maintenance.
+                    compact = cls._compact_label_name(key)
+                    candidates = sorted({k for k in ade_name_to_id.keys() if compact and compact in k})[:8]
+                    hint = f" candidates={candidates}" if candidates else ""
+                    raise ValueError(f"unknown ADE20K label name in yaml: '{ade_name}'.{hint}")
                 ade_id_to_dataset_id[ade_id] = dataset_id
 
         unmapped = int(raw.get("unmapped", 255))

@@ -7,26 +7,28 @@
 # You can edit this file while the GUI is running; restart to reload.
 
 ignore_id: 255
-unmapped: 13
+unmapped: 19  # 対応表にないオブジェクトはすべて「19: unlabeled」に落とす
 
 classes:
   0:
     name: road
     ade20k:
       - road
-      - swimming pool
-      - water
-      - fountain
+      - runway
+      - swimming pool   # 緑色アスファルトの誤検知対策
+      - water           # 緑色アスファルトの誤検知対策
+      - fountain        # 緑色アスファルトの誤検知対策
   1:
     name: sidewalk
     ade20k:
       - sidewalk
-      - path
   2:
     name: building
     ade20k:
       - building
       - skyscraper
+      - house
+      - tower
   3:
     name: wall
     ade20k:
@@ -36,54 +38,78 @@ classes:
     name: fence
     ade20k:
       - fence
+      - railing
   5:
     name: pole
     ade20k:
       - pole
       - streetlight
   6:
+    name: campus_path
+    ade20k:
+      - path
+  7:
+    name: parking
+    ade20k: []
+  8:
     name: vegetation
     ade20k:
       - tree
       - plant
       - grass
-      - field
-      - sand
+      - flower
+      
+  9:
+    name: terrain
+    ade20k:
       - earth
+      - sand
+      - rock
+      - hill
       - field
-  7:
+      - land
+  10:
     name: sky
     ade20k:
       - sky
-  8:
+  11:
     name: person
     ade20k:
       - person
       - bag
-  9:
-    name: vehicle
-    ade20k:
-      - car
-      - bus
-      - truck
-      - van
-  10:
-    name: cycle
-    ade20k:
-      - bicycle
-      - minibike
-  11:
-    name: stairs
-    ade20k:
-      - stairs
-      - stairway
-      - step
   12:
     name: floor
     ade20k:
       - floor
       - rug
   13:
+    name: vehicle
+    ade20k:
+      - car
+      - van
+      - truck
+      - bus
+  14:
+    name: train
+    ade20k: []
+  15:
+    name: motorcycle
+    ade20k:
+      - minibike
+  16:
+    name: bicycle
+    ade20k:
+      - bicycle
+  17:
+    name: rider
+    ade20k: []
+  18:
+    name: obstacle
+    ade20k:
+      - stairs
+      - stairway
+      - step
+  19:
     name: unlabeled
     ade20k: []
 

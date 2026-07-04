@@ -111,7 +111,28 @@ class AppGUI:
 
         self.var_show_seg = tk.BooleanVar(value=False)
 
-        self.class_color_overrides: Dict[int, Tuple[int, int, int]] = {}
+        self.class_color_overrides: Dict[int, Tuple[int, int, int]] = {
+            0: (0, 100, 0),
+            1: (0, 200, 0),
+            2: (0, 255, 255),
+            3: (0, 0, 255),
+            4: (0, 100, 255),
+            5: (0, 50, 255),
+            6: (150, 255, 150),
+            7: (255, 0, 200),
+            8: (0, 200, 255),
+            9: (50, 100, 100),
+            10: (255, 0, 0),
+            11: (0, 0, 0),
+            12: (0, 255, 0),
+            13: (255, 255, 0),
+            14: (255, 200, 0),
+            15: (255, 100, 0),
+            16: (150, 100, 0),
+            17: (0, 0, 0),
+            18: (0, 0, 200),
+            19: (255, 255, 255),
+        }
         self._run_stop_event = threading.Event()
         self._run_thread: Optional[threading.Thread] = None
 
@@ -733,9 +754,8 @@ class AppGUI:
         self._on_preview1()
 
     def _state_file_path(self) -> Path:
-        xdg = os.environ.get("XDG_CONFIG_HOME")
-        base = Path(xdg) if xdg else (Path.home() / ".config")
-        return base / "mask2dataset" / "state.json"
+        repo_root = Path(__file__).resolve().parent.parent
+        return repo_root / ".mask2dataset" / "state.json"
 
     def _load_persisted_paths(self) -> None:
         path = self._state_file_path()
